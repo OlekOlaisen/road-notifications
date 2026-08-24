@@ -55,6 +55,16 @@ Heads-up alerts on Android Auto:
 
 Data is imported from NVDB / Vegkart CSV exports into `app/src/main/assets/vegdata.db`. See [`scripts/README.md`](scripts/README.md) for import details.
 
+## Download
+
+Pre-built release APKs are published on [GitHub Releases](https://github.com/OlekOlaisen/road-notifications/releases).
+
+1. Open the latest release and download `app-release.apk`.
+2. On your phone, allow **Install unknown apps** for your browser or file manager.
+3. Open the APK to install. For updates, install over the existing app (same signing key).
+
+For **Android Auto**, also enable developer settings and allow unknown sources for sideloaded apps (see below).
+
 ## Requirements
 
 - Android **8.0+** (API 26)
@@ -63,6 +73,28 @@ Data is imported from NVDB / Vegkart CSV exports into `app/src/main/assets/vegda
 - For Auto: developer mode + **Unknown sources** for sideloaded apps
 
 ## Build
+
+### Release (for distribution)
+
+1. Copy `keystore.properties.example` to `keystore.properties` and set your keystore passwords.
+2. Create a release keystore (once):
+
+```bash
+keytool -genkey -v -keystore vegassistent-release.keystore -alias vegassistent -keyalg RSA -keysize 2048 -validity 10000
+```
+
+3. Build and upload to GitHub Releases:
+
+```bash
+./gradlew :app:assembleRelease
+gh release create v1.0.0 app/build/outputs/apk/release/app-release.apk --title "Vegassistent 1.0" --notes "First public release"
+```
+
+Output: `app/build/outputs/apk/release/app-release.apk`
+
+> **Important:** Back up `vegassistent-release.keystore` and `keystore.properties`. You need the same key for all future updates. These files are gitignored and never committed.
+
+### Debug (local testing)
 
 ```bash
 ./gradlew :app:assembleDebug
