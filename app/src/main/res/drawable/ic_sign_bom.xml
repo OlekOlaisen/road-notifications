@@ -1,0 +1,26 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="192dp"
+    android:height="192dp"
+    android:viewportWidth="192"
+    android:viewportHeight="192">
+    
+    <!-- Outer blue square background -->
+    <path
+        android:fillColor="#005AA0"
+        android:pathData="M0,0h192v192H0z" />
+        
+    <!-- Inner white circle -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M96,16a80,80 0,1 1,0 160a80,80 0,1 1,0 -160z" />
+        
+    <!-- Letter 'K' -->
+    <path
+        android:fillColor="#000000"
+        android:pathData="M52,56h16v32l24,-32h20l-30,38l32,42h-20l-22,-30l-4,5v25H52V56z" />
+        
+    <!-- Letter 'r' -->
+    <path
+        android:fillColor="#000000"
+        android:pathData="M118,80h16v11c4,-8 11,-13 20,-13v15c-8,0 -15,4 -18,11v34h-18V80z" />
+</vector>

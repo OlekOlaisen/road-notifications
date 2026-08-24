@@ -1,0 +1,1 @@
+# Ingen tredjepartspakker. Skriptet bruker kun Python standardbibliotek (csv, sqlite3).

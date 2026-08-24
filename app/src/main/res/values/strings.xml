@@ -1,0 +1,16 @@
+<resources>
+    <string name="app_name">Vegassistent</string>
+    <string name="notification_sender">Vegassistent</string>
+    <string name="channel_tracking_name">Sporing</string>
+    <string name="channel_tracking_description">Viser at ruteassistenten kjører i bakgrunnen.</string>
+    <string name="channel_alerts_name">Vegvarsler</string>
+    <string name="channel_alerts_description">Heads-up-varsler om fartsgrense, fotoboks, bom og forkjørsvei.</string>
+    <string name="channel_wildlife_name">Viltfare</string>
+    <string name="channel_wildlife_description">Markante varsler om elg- og hjortefare.</string>
+    <string name="tracking_notification_title">Vegassistent kjører</string>
+    <string name="tracking_notification_text">Lytter etter vegobjekter langs ruten.</string>
+    <string name="car_screen_tracking_active">Sporing aktiv</string>
+    <string name="car_screen_last_alert_prefix">Siste varsel: %1$s</string>
+    <string name="car_notification_reply">Svar</string>
+    <string name="car_notification_mark_as_read">Merk som lest</string>
+</resources>

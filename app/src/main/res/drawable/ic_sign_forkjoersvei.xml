@@ -1,0 +1,27 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="192dp"
+    android:height="192dp"
+    android:viewportWidth="192"
+    android:viewportHeight="192">
+    
+    <!-- Outer black border diamond -->
+    <path
+        android:fillColor="#111111"
+        android:pathData="M96,4L188,96L96,188L4,96Z" />
+
+    <!-- White middle diamond -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M96,16L176,96L96,176L16,96Z" />
+
+    <!-- Inner black outline for the yellow diamond -->
+    <path
+        android:fillColor="#111111"
+        android:pathData="M96,44L148,96L96,148L44,96Z" />
+
+    <!-- Yellow center diamond -->
+    <path
+        android:fillColor="#E5C13D"
+        android:pathData="M96,50L142,96L96,142L50,96Z" />
+
+</vector>
