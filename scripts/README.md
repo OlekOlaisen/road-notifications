@@ -57,4 +57,18 @@ Eksempler: `Fartsgrense_105-eksport OSLO.csv`, `ATK-punkt_162-eksport ATK-PUNKT.
 
 ## Room-hash
 
-`ROOM_IDENTITY_HASH` i skriptet må matche `identityHash` i `app/schemas/no.roadnotifications.data.VegDatabase/1.json` etter compile. Oppdater konstanten hvis `VegObjektEntity` endres.
+`ROOM_IDENTITY_HASH` i skriptet må matche `identityHash` i `app/schemas/no.roadnotifications.data.VegDatabase/2.json` etter compile. Oppdater konstanten hvis `VegObjektEntity` endres.
+
+## Veinett (OSM / GraphHopper)
+
+`roadgraph.db` er det offline veinettet appen snapper GPS mot.
+
+1. Last ned [norway-latest.osm.pbf](https://download.geofabrik.de/europe/norway.html) til `scripts/csv/`.
+2. Kjør:
+
+```bash
+./gradlew :importer:run
+```
+
+Skriver `app/src/main/assets/roadgraph.db`. Første kjøring av hele Norge tar gjerne 10–30 minutter og bruker flere GB RAM. GraphHopper-cachen i `scripts/graphhopper-cache/` gjør senere eksport raskere.
+

@@ -49,9 +49,10 @@ Heads-up alerts on Android Auto:
 ## How it works
 
 1. **Tracking** starts when you open the app (foreground location service).
-2. Each GPS update queries nearby objects in Room/SQLite.
-3. Candidates are filtered by distance, heading, and (when available) NVDB travel direction (`MED`/`MOT`).
-4. Matching objects become phone + Auto notifications; preferences from the **Varsler** tab are respected.
+2. Each GPS update is **snapped to the offline road graph** (`roadgraph.db`, built from OSM with GraphHopper). Poor GPS (tunnels, bridges) stays on the last road instead of jumping.
+3. Snapped position is queried against nearby NVDB objects in Room/SQLite.
+4. Candidates are filtered by distance, heading along the matched road, and (when available) NVDB travel direction (`MED`/`MOT`).
+5. Matching objects become phone + Auto notifications; preferences from the **Varsler** tab are respected.
 
 Data is imported from NVDB / Vegkart CSV exports into `app/src/main/assets/vegdata.db`. See [`scripts/README.md`](scripts/README.md) for import details.
 
@@ -119,6 +120,7 @@ Alerts use the messaging/car notification path so they can show as heads-up whil
 ```
 app/                 Android app (Compose UI, tracking service, Auto)
 scripts/             NVDB CSV → SQLite import and sign SVG conversion
+importer/            GraphHopper OSM → offline road graph (`roadgraph.db`)
 app/src/main/assets/ vegdata.db (bundled offline database)
 ```
 
@@ -135,6 +137,18 @@ python scripts/import_vegdata.py --only BOM,FORKJOERSVEI
 ```
 
 Uses the Python standard library only. Filename patterns and columns are documented in [`scripts/README.md`](scripts/README.md).
+
+### Road matching (OpenStreetMap)
+
+Place a Norway OSM extract (`.osm.pbf` from [Geofabrik](https://download.geofabrik.de/europe/norway.html)) in `scripts/csv/`, then:
+
+```bash
+./gradlew :importer:run
+```
+
+This uses GraphHopper on the desktop to build `app/src/main/assets/roadgraph.db`. While driving, the app snaps GPS to that graph so alerts follow the road you are on — including in tunnels and under bridges, where raw GPS jumps.
+
+The PBF and GraphHopper cache stay on disk (`scripts/csv/`, `scripts/graphhopper-cache/`) and are gitignored. Rebuild `roadgraph.db` after replacing the OSM extract. First import of all of Norway can take a long time and needs several GB of RAM.
 
 > **Note:** `vegdata.db` is large (~80 MB). GitHub accepts it but warns above the 50 MB soft recommendation; Git LFS is optional if you prefer.
 

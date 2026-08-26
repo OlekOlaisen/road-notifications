@@ -5,6 +5,7 @@
 .DS_Store
 /build
 /app/build
+/importer/build
 /captures
 .externalNativeBuild
 .cxx
@@ -12,7 +13,14 @@
 *.ap_
 *.aab
 scripts/csv/*.csv
+scripts/csv/*.pbf
+scripts/csv/*.osm.pbf
 !scripts/csv/.gitkeep
+scripts/graphhopper-cache/
+app/src/main/assets/roadgraph.db
+app/src/main/assets/vegdata.db
+app/src/main/assets/vegdata.import.db
+*.db-journal
 __pycache__/
 *.pyc
 .venv/

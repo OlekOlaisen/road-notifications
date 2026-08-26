@@ -35,6 +35,25 @@ object LocationDistance {
     const val QUERY_RADIUS_METERS = 400.0
 
     /**
+     * Above this horizontal accuracy, GPS is too noisy to snap onto a new road
+     * (typical in tunnels and under bridges).
+     */
+    const val MAX_GPS_ACCURACY_METERS = 25f
+
+    /**
+     * How close the snapped position must be to a stretch polyline to count
+     * as being on that speed-limit / priority-road zone. OSM and NVDB
+     * centerlines often differ by more than 15 m.
+     */
+    const val STRETCH_ON_ROAD_METERS = 32f
+
+    /**
+     * Query radius for polyline-segment lookup. Slightly larger than
+     * [STRETCH_ON_ROAD_METERS] so a hit is not lost to bbox rounding.
+     */
+    const val STRETCH_QUERY_RADIUS_METERS = 40.0
+
+    /**
      * Prefer alerting ahead of / at the sign, but still allow a short distance
      * after passing so GPS lag does not drop the alert entirely.
      */
@@ -43,9 +62,9 @@ object LocationDistance {
     private const val MIN_HEADING_SPEED_METERS_PER_SECOND = 1.5f
     private const val MIN_HEADING_MOVEMENT_METERS = 5f
     private const val METERS_PER_DEGREE_LATITUDE = 111_320.0
-    private const val MAX_LOK_RETNING_HEADING_DELTA_DEGREES = 55f
+    private const val MAX_LOK_RETNING_HEADING_DELTA_DEGREES = 70f
     private const val CROSS_TRACK_ALONG_RATIO = 0.22f
-    private const val MIN_DYNAMIC_CROSS_TRACK_METERS = 6f
+    private const val MIN_DYNAMIC_CROSS_TRACK_METERS = 12f
 
     fun hasMovedEnough(previous: Location?, current: Location): Boolean {
         if (previous == null) {
@@ -100,8 +119,10 @@ object LocationDistance {
         previousLocation: Location?,
         targetLatitude: Double,
         targetLongitude: Double,
+        travelHeadingOverrideDegrees: Float? = null,
     ): TravelPathOffset? {
-        val headingDegrees = headingDegrees(currentLocation, previousLocation)
+        val headingDegrees = travelHeadingOverrideDegrees
+            ?: headingDegrees(currentLocation, previousLocation)
             ?: return null
         val distanceAndBearing = FloatArray(2)
         Location.distanceBetween(
@@ -185,7 +206,8 @@ object LocationDistance {
 
     private fun effectiveMaxCrossTrackMeters(objektType: String, alongTrackMeters: Float): Float {
         val absoluteMaxCrossTrackMeters = maxCrossTrackMeters(objektType)
-        if (objektType == VegObjektType.FORKJOERSVEI.name ||
+        if (objektType == VegObjektType.FART.name ||
+            objektType == VegObjektType.FORKJOERSVEI.name ||
             objektType == VegObjektType.SLUTT_FORKJOERSVEI.name
         ) {
             return absoluteMaxCrossTrackMeters
@@ -200,7 +222,7 @@ object LocationDistance {
 
     private fun maxCrossTrackMeters(objektType: String): Float {
         return when (objektType) {
-            VegObjektType.FART.name -> 12f
+            VegObjektType.FART.name -> 24f
             VegObjektType.FORKJOERSVEI.name -> 35f
             VegObjektType.BOM.name -> 25f
             VegObjektType.FOTOBOKS.name -> 28f
@@ -218,7 +240,7 @@ object LocationDistance {
 
     private fun maxHeadingDeltaDegrees(objektType: String): Float {
         return when (objektType) {
-            VegObjektType.FART.name -> 12f
+            VegObjektType.FART.name -> 25f
             VegObjektType.FORKJOERSVEI.name -> 32f
             VegObjektType.BOM.name -> 22f
             VegObjektType.FOTOBOKS.name -> 20f
@@ -232,6 +254,15 @@ object LocationDistance {
             VegObjektType.SLUTT_FORKJOERSVEI.name -> 32f
             else -> 20f
         }
+    }
+
+    fun headingDeltaDegrees(fromDegrees: Float, toDegrees: Float): Float {
+        return abs(signedHeadingDeltaDegrees(fromDegrees, toDegrees))
+    }
+
+    fun isStretchType(objektType: String): Boolean {
+        return objektType == VegObjektType.FART.name ||
+            objektType == VegObjektType.FORKJOERSVEI.name
     }
 
     fun headingDegrees(currentLocation: Location, previousLocation: Location?): Float? {

@@ -27,6 +27,7 @@ import no.roadnotifications.car.VegCarMessageActionService
 import no.roadnotifications.data.VegObjektEntity
 import no.roadnotifications.data.VegObjektType
 import no.roadnotifications.location.LocationDistance
+import no.roadnotifications.log.TripLog
 import no.roadnotifications.settings.AlertPreferences
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
@@ -41,15 +42,34 @@ class VegNotificationManager(private val context: Context) {
     private val alertPreferences = AlertPreferences(context)
 
     fun notifyIfNeeded(candidates: List<AlertCandidate>, currentLocation: Location): Boolean {
-        val toNotify = candidates
-            .filter { candidate ->
-                alertPreferences.isEnabled(
-                    candidate.vegObjekt.type,
-                    candidate.vegObjekt.verdi,
-                )
-            }
-            .filter { candidate -> shouldNotify(candidate.vegObjekt, currentLocation) }
-            .sortedBy { candidate -> messageOrder(candidate.vegObjekt.type) }
+        val enabled = candidates.filter { candidate ->
+            alertPreferences.isEnabled(
+                candidate.vegObjekt.type,
+                candidate.vegObjekt.verdi,
+            )
+        }
+        val disabled = candidates.filter { candidate -> candidate !in enabled }
+        if (disabled.isNotEmpty()) {
+            TripLog.append(
+                "SKIP disabled=" + disabled.joinToString(",") { candidate ->
+                    TripLog.formatObjekt(candidate.vegObjekt)
+                },
+            )
+        }
+        val passingCooldown = enabled.filter { candidate ->
+            shouldNotify(candidate.vegObjekt, currentLocation)
+        }
+        val cooledDown = enabled.filter { candidate -> candidate !in passingCooldown }
+        if (cooledDown.isNotEmpty()) {
+            TripLog.append(
+                "SKIP cooldown=" + cooledDown.joinToString(",") { candidate ->
+                    TripLog.formatObjekt(candidate.vegObjekt)
+                },
+            )
+        }
+        val toNotify = passingCooldown.sortedBy { candidate ->
+            messageOrder(candidate.vegObjekt.type)
+        }
         if (toNotify.isEmpty()) {
             return false
         }
@@ -57,6 +77,11 @@ class VegNotificationManager(private val context: Context) {
         toNotify.forEach { candidate ->
             rememberNotification(candidate.vegObjekt, currentLocation)
         }
+        TripLog.append(
+            "ALERT " + toNotify.joinToString(",") { candidate ->
+                TripLog.formatObjekt(candidate.vegObjekt)
+            },
+        )
         return true
     }
 
@@ -319,6 +344,7 @@ class VegNotificationManager(private val context: Context) {
         const val ALERT_NOTIFICATION_ID = 2
         val ALERT_NOTIFICATION_IDS = listOf(2, 3, 4, 5, 6)
         private const val TEST_ALERT_BASE_ID = -1000L
+        private const val SKYTTELPASS_RABATT = 0.20
 
         fun alertLabelFor(vegObjekt: VegObjektEntity): String {
             return titleFor(vegObjekt)
@@ -386,10 +412,27 @@ class VegNotificationManager(private val context: Context) {
         }
 
         private fun bomSubtitle(verdi: String): String {
-            return if (verdi.isBlank()) {
-                "Bomstasjon foran"
+            if (verdi.isBlank()) {
+                return "Bomstasjon foran"
+            }
+            val displayedPrice = skyttelpassPris(verdi) ?: verdi
+            return "Pris bomstasjon: $displayedPrice kr"
+        }
+
+        private fun skyttelpassPris(verdi: String): String? {
+            val fullPrice = verdi.replace(',', '.').toDoubleOrNull() ?: return null
+            val discounted = fullPrice * (1.0 - SKYTTELPASS_RABATT)
+            return formatKroner(discounted)
+        }
+
+        private fun formatKroner(amount: Double): String {
+            val ore = kotlin.math.round(amount * 100.0).toLong()
+            val kroner = ore / 100
+            val remainder = (ore % 100).toInt()
+            return if (remainder == 0) {
+                kroner.toString()
             } else {
-                "Pris bomstasjon: $verdi kr"
+                "%d,%02d".format(kroner, remainder)
             }
         }
 

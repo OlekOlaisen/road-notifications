@@ -26,4 +26,10 @@ data class VegObjektEntity(
      * Compass bearing (degrees) of metrering direction (MED), derived from LINESTRING when available.
      */
     val vegRetningGrader: Float? = null,
+    /**
+     * Packed polyline for stretch objects (speed limit, priority road).
+     * Used to detect that the vehicle has entered the stretch, not only
+     * the start coordinate.
+     */
+    val points: ByteArray? = null,
 )

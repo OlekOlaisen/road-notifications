@@ -11,11 +11,13 @@ import csv
 import math
 import re
 import sqlite3
+import struct
 import sys
 import unicodedata
 from pathlib import Path
 
-ROOM_IDENTITY_HASH = "bb3b088674d2e2d10cdc742d1cca274a"
+ROOM_IDENTITY_HASH = "97938522629ed225cf246da686482065"
+ROOM_DATABASE_VERSION = 2
 
 ROOT = Path(__file__).resolve().parents[1]
 CSV_DIR = ROOT / "scripts" / "csv"
@@ -25,7 +27,22 @@ CREATE_VEGOBJEKT = (
     "CREATE TABLE IF NOT EXISTS `vegobjekt` (`id` INTEGER NOT NULL, `type` TEXT NOT NULL, "
     "`verdi` TEXT, `lat` REAL NOT NULL, `lon` REAL NOT NULL, `minLat` REAL NOT NULL, "
     "`maxLat` REAL NOT NULL, `minLon` REAL NOT NULL, `maxLon` REAL NOT NULL, "
-    "`retning` TEXT, `vegRetningGrader` REAL, PRIMARY KEY(`id`))"
+    "`retning` TEXT, `vegRetningGrader` REAL, `points` BLOB, PRIMARY KEY(`id`))"
+)
+
+CREATE_VEGOBJEKT_RTREE = (
+    "CREATE VIRTUAL TABLE IF NOT EXISTS vegobjekt_rtree USING rtree("
+    "id, minLat, maxLat, minLon, maxLon)"
+)
+
+CREATE_VEGOBJEKT_SEG = (
+    "CREATE TABLE IF NOT EXISTS vegobjekt_seg ("
+    "segId INTEGER PRIMARY KEY, objektId INTEGER NOT NULL)"
+)
+
+CREATE_VEGOBJEKT_SEG_RTREE = (
+    "CREATE VIRTUAL TABLE IF NOT EXISTS vegobjekt_seg_rtree USING rtree("
+    "segId, minLat, maxLat, minLon, maxLon)"
 )
 
 ID_COLUMNS = ("vegobjekt-id", "vegobjektid", "vegobjekt_id", "nvdbid", "id")
@@ -116,6 +133,8 @@ def detect_skiltplate_type(normalized_filename: str) -> str | None:
         return "SMALERE_VEG"
     if "208" in normalized_filename:
         return "SLUTT_FORKJOERSVEI"
+    if "206" in normalized_filename:
+        return "FORKJOERSVEI"
     if "122" in normalized_filename:
         return "TUNNEL"
     return None
@@ -235,13 +254,36 @@ def parse_wkt_projected_points(wkt: str) -> list[tuple[float, float]]:
 
 
 def sample_projected_points(points: list[tuple[float, float]]) -> list[tuple[float, float]]:
-    if len(points) <= 24:
+    if len(points) <= 80:
         return points
-    step = max(1, len(points) // 24)
+    step = max(1, len(points) // 80)
     sampled = points[::step]
     if sampled[-1] != points[-1]:
         sampled.append(points[-1])
     return sampled
+
+
+def resample_projected_points(
+    points: list[tuple[float, float]],
+    spacing_meters: float = 20.0,
+    max_points: int = 64,
+) -> list[tuple[float, float]]:
+    if len(points) < 2:
+        return points
+    sampled = [points[0]]
+    for candidate in points[1:]:
+        last = sampled[-1]
+        distance = math.hypot(candidate[0] - last[0], candidate[1] - last[1])
+        if distance >= spacing_meters:
+            sampled.append(candidate)
+    if sampled[-1] != points[-1]:
+        sampled.append(points[-1])
+    if len(sampled) <= max_points:
+        return sampled
+    step = (len(sampled) - 1) / (max_points - 1)
+    reduced = [sampled[int(index * step)] for index in range(max_points - 1)]
+    reduced.append(sampled[-1])
+    return reduced
 
 
 def compass_bearing_degrees(
@@ -324,14 +366,17 @@ def geometry_from_row(
                 "min_lon": longitude,
                 "max_lon": longitude,
                 "veg_retning_grader": None,
+                "points": [(latitude, longitude)],
             }
 
     for wkt_name in WKT_COLUMNS:
         column = find_column(columns, (wkt_name,))
         if column is None:
             continue
-        projected_points = sample_projected_points(
-            parse_wkt_projected_points(str(row.get(column, "")))
+        projected_points = resample_projected_points(
+            sample_projected_points(
+                parse_wkt_projected_points(str(row.get(column, "")))
+            )
         )
         if not projected_points:
             continue
@@ -357,6 +402,7 @@ def geometry_from_row(
             "min_lon": min(longitudes),
             "max_lon": max(longitudes),
             "veg_retning_grader": veg_retning,
+            "points": list(zip(latitudes, longitudes)),
         }
     return None
 
@@ -367,14 +413,33 @@ def alert_coordinates(
     geometry: dict[str, float | None],
 ) -> tuple[float, float]:
     """
-    Forkjørsvei stretches can be kilometers long. Alert at the entrance for the
-    relevant travel direction instead of the geometric midpoint.
+    Forkjørsvei and fartsgrense stretches can be kilometers long. Alert at the
+    entrance for the relevant travel direction instead of the geometric midpoint.
     """
-    if objekt_type in {"FORKJOERSVEI", "SLUTT_FORKJOERSVEI"}:
+    if objekt_type in {"FORKJOERSVEI", "SLUTT_FORKJOERSVEI", "FART"}:
         if (retning or "").upper() == "MOT":
             return float(geometry["end_lat"]), float(geometry["end_lon"])
         return float(geometry["start_lat"]), float(geometry["start_lon"])
     return float(geometry["centroid_lat"]), float(geometry["centroid_lon"])
+
+
+def pack_stretch_points(
+    objekt_type: str,
+    geometry: dict[str, float | None],
+) -> bytes | None:
+    if objekt_type not in {"FART", "FORKJOERSVEI"}:
+        return None
+    raw_points = geometry.get("points")
+    if not isinstance(raw_points, list) or len(raw_points) < 2:
+        return None
+    packed = struct.pack("<I", len(raw_points))
+    for latitude, longitude in raw_points:
+        packed += struct.pack(
+            "<ii",
+            int(round(float(latitude) * 1_000_000.0)),
+            int(round(float(longitude) * 1_000_000.0)),
+        )
+    return packed
 
 
 def retning_from_row(row: dict[str, str], columns: list[str]) -> str | None:
@@ -498,6 +563,7 @@ def skiltnummer_from_filename(filename: str) -> str | None:
         "106.3",
         "122",
         "208",
+        "206",
         "204",
     ):
         if code in normalized:
@@ -520,6 +586,28 @@ def parse_id(row: dict[str, str], columns: list[str]) -> int | None:
     return int(digits)
 
 
+FORKJOERSVEI_EXTRA_ROW_FLAG = 1 << 62
+FORKJOERSVEI_NVDB_ID_BITS = 46
+FORKJOERSVEI_OCCURRENCE_BITS = 16
+
+
+def forkjoersvei_row_id(nvdb_id: int, occurrence: int) -> int:
+    """Keep every NVDB 596 linestring. Extra rows for the same id get a unique PK."""
+    if occurrence <= 0:
+        return nvdb_id
+    max_nvdb_id = 1 << FORKJOERSVEI_NVDB_ID_BITS
+    max_occurrence = 1 << FORKJOERSVEI_OCCURRENCE_BITS
+    if nvdb_id >= max_nvdb_id or occurrence >= max_occurrence:
+        raise ValueError(
+            f"Kan ikke lage unik forkjørsvei-id for nvdb_id={nvdb_id} occurrence={occurrence}"
+        )
+    return (
+        FORKJOERSVEI_EXTRA_ROW_FLAG
+        | ((nvdb_id & (max_nvdb_id - 1)) << FORKJOERSVEI_OCCURRENCE_BITS)
+        | occurrence
+    )
+
+
 def detect_separator(path: Path) -> str:
     sample = path.read_text(encoding="utf-8-sig", errors="replace")[:8192]
     try:
@@ -529,11 +617,17 @@ def detect_separator(path: Path) -> str:
         return ";" if sample.count(";") >= sample.count(",") else ","
 
 
-def import_csv(path: Path, connection: sqlite3.Connection) -> int:
+def import_csv(
+    path: Path,
+    connection: sqlite3.Connection,
+    forkjoersvei_occurrences: dict[int, int] | None = None,
+) -> int:
     objekt_type = detect_type(path.name)
     if objekt_type is None:
         print(f"Hopper over ukjent fil: {path.name}")
         return 0
+    if forkjoersvei_occurrences is None:
+        forkjoersvei_occurrences = {}
     separator = detect_separator(path)
     inserted = 0
     skipped = 0
@@ -556,14 +650,20 @@ def import_csv(path: Path, connection: sqlite3.Connection) -> int:
             verdi = value_for_type(string_row, columns, objekt_type, path.name)
             retning = retning_from_row(string_row, columns)
             latitude, longitude = alert_coordinates(objekt_type, retning, geometry)
+            points_blob = pack_stretch_points(objekt_type, geometry)
+            row_id = objekt_id
+            if objekt_type == "FORKJOERSVEI":
+                occurrence = forkjoersvei_occurrences.get(objekt_id, 0)
+                forkjoersvei_occurrences[objekt_id] = occurrence + 1
+                row_id = forkjoersvei_row_id(objekt_id, occurrence)
             connection.execute(
                 """
                 INSERT OR REPLACE INTO vegobjekt
-                (id, type, verdi, lat, lon, minLat, maxLat, minLon, maxLon, retning, vegRetningGrader)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (id, type, verdi, lat, lon, minLat, maxLat, minLon, maxLon, retning, vegRetningGrader, points)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    objekt_id,
+                    row_id,
                     objekt_type,
                     verdi,
                     latitude,
@@ -574,6 +674,7 @@ def import_csv(path: Path, connection: sqlite3.Connection) -> int:
                     geometry["max_lon"],
                     retning,
                     geometry["veg_retning_grader"],
+                    points_blob,
                 ),
             )
             inserted += 1
@@ -594,6 +695,9 @@ def import_csv(path: Path, connection: sqlite3.Connection) -> int:
 
 def create_database(connection: sqlite3.Connection) -> None:
     connection.execute(CREATE_VEGOBJEKT)
+    connection.execute(CREATE_VEGOBJEKT_RTREE)
+    connection.execute(CREATE_VEGOBJEKT_SEG)
+    connection.execute(CREATE_VEGOBJEKT_SEG_RTREE)
     connection.execute(
         "CREATE INDEX IF NOT EXISTS `index_vegobjekt_lat_lon` ON `vegobjekt` (`lat`, `lon`)"
     )
@@ -605,6 +709,96 @@ def create_database(connection: sqlite3.Connection) -> None:
         "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, ?)",
         (ROOM_IDENTITY_HASH,),
     )
+    connection.execute(f"PRAGMA user_version = {ROOM_DATABASE_VERSION}")
+
+
+def unpack_stretch_points(blob: bytes | None) -> list[tuple[float, float]]:
+    if blob is None or len(blob) < 12:
+        return []
+    point_count = struct.unpack_from("<I", blob, 0)[0]
+    if point_count < 2 or len(blob) < 4 + point_count * 8:
+        return []
+    points: list[tuple[float, float]] = []
+    offset = 4
+    for _ in range(point_count):
+        latitude_e6, longitude_e6 = struct.unpack_from("<ii", blob, offset)
+        points.append((latitude_e6 / 1_000_000.0, longitude_e6 / 1_000_000.0))
+        offset += 8
+    return points
+
+
+def rebuild_rtree(connection: sqlite3.Connection) -> None:
+    connection.execute("DROP TABLE IF EXISTS vegobjekt_rtree")
+    connection.execute(CREATE_VEGOBJEKT_RTREE)
+    connection.execute(
+        """
+        INSERT INTO vegobjekt_rtree(id, minLat, maxLat, minLon, maxLon)
+        SELECT id, minLat, maxLat, minLon, maxLon FROM vegobjekt
+        """
+    )
+
+
+def rebuild_segment_rtree(connection: sqlite3.Connection) -> None:
+    """Index each polyline segment so mid-stretch lookup does not use huge bboxes."""
+    connection.execute("DROP TABLE IF EXISTS vegobjekt_seg_rtree")
+    connection.execute("DROP TABLE IF EXISTS vegobjekt_seg")
+    connection.execute(CREATE_VEGOBJEKT_SEG)
+    connection.execute(CREATE_VEGOBJEKT_SEG_RTREE)
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS index_vegobjekt_seg_objektId ON vegobjekt_seg(objektId)"
+    )
+    pad_degrees = 0.00025
+    segment_id = 1
+    segment_rows: list[tuple[int, int]] = []
+    rtree_rows: list[tuple[int, float, float, float, float]] = []
+    rows = connection.execute(
+        "SELECT id, points FROM vegobjekt WHERE type IN ('FART', 'FORKJOERSVEI') AND points IS NOT NULL"
+    )
+    for objekt_id, blob in rows:
+        points = unpack_stretch_points(blob)
+        for index in range(len(points) - 1):
+            start_latitude, start_longitude = points[index]
+            end_latitude, end_longitude = points[index + 1]
+            segment_rows.append((segment_id, objekt_id))
+            rtree_rows.append(
+                (
+                    segment_id,
+                    min(start_latitude, end_latitude) - pad_degrees,
+                    max(start_latitude, end_latitude) + pad_degrees,
+                    min(start_longitude, end_longitude) - pad_degrees,
+                    max(start_longitude, end_longitude) + pad_degrees,
+                )
+            )
+            segment_id += 1
+            if len(segment_rows) >= 8_000:
+                connection.executemany(
+                    "INSERT INTO vegobjekt_seg(segId, objektId) VALUES (?, ?)",
+                    segment_rows,
+                )
+                connection.executemany(
+                    """
+                    INSERT INTO vegobjekt_seg_rtree(segId, minLat, maxLat, minLon, maxLon)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    rtree_rows,
+                )
+                segment_rows.clear()
+                rtree_rows.clear()
+                connection.commit()
+                print(f"Strekning-indeks: {segment_id - 1} segmenter", flush=True)
+    if segment_rows:
+        connection.executemany(
+            "INSERT INTO vegobjekt_seg(segId, objektId) VALUES (?, ?)",
+            segment_rows,
+        )
+        connection.executemany(
+            """
+            INSERT INTO vegobjekt_seg_rtree(segId, minLat, maxLat, minLon, maxLon)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            rtree_rows,
+        )
+    print(f"Strekning-indeks ferdig: {segment_id - 1} segmenter", flush=True)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -618,7 +812,26 @@ def main(argv: list[str] | None = None) -> int:
         metavar="TYPE",
         help="Oppdater kun angitte typer (kommaseparert), f.eks. STOPP,FARLIG_SVING",
     )
+    parser.add_argument(
+        "--segments-only",
+        action="store_true",
+        help="Bygg bare strekning-indeksen på eksisterende vegdata.db",
+    )
     args = parser.parse_args(argv)
+    if args.segments_only:
+        if not OUTPUT_DB.exists():
+            print(f"Fant ikke {OUTPUT_DB}. Kjør full import først.")
+            return 1
+        working_db = OUTPUT_DB.with_suffix(".import.db")
+        shutil.copy2(OUTPUT_DB, working_db)
+        connection = sqlite3.connect(working_db)
+        try:
+            rebuild_segment_rtree(connection)
+            connection.commit()
+        finally:
+            connection.close()
+        return replace_output_db(working_db)
+
     only_types: set[str] | None = None
     if args.only:
         only_types = {
@@ -654,45 +867,56 @@ def main(argv: list[str] | None = None) -> int:
         if not csv_files:
             print(f"Ingen CSV-filer i {CSV_DIR}.")
         total = 0
+        forkjoersvei_occurrences: dict[int, int] = {}
         for csv_path in csv_files:
             detected = detect_type(csv_path.name)
             if only_types is not None and detected not in only_types:
                 continue
-            total += import_csv(csv_path, connection)
+            total += import_csv(csv_path, connection, forkjoersvei_occurrences)
+        rebuild_rtree(connection)
+        rebuild_segment_rtree(connection)
         connection.commit()
         print(f"Skrev {total} rader til {working_db}")
     finally:
         connection.close()
 
     if working_db != OUTPUT_DB:
-        replaced = False
-        last_error: Exception | None = None
-        for _attempt in range(8):
-            try:
-                if OUTPUT_DB.exists():
-                    OUTPUT_DB.unlink()
-                working_db.replace(OUTPUT_DB)
-                replaced = True
-                break
-            except OSError as error:
-                last_error = error
-                time.sleep(0.75)
-        if not replaced:
-            try:
-                shutil.copy2(working_db, OUTPUT_DB)
-                print(f"Kopierte til {OUTPUT_DB} (replace var låst).")
-                working_db.unlink(missing_ok=True)
-                replaced = True
-            except OSError as copy_error:
-                print(
-                    f"Klarte ikke å erstatte {OUTPUT_DB} (filen er trolig låst). "
-                    f"Ny database ligger i {working_db}. "
-                    f"Lukk appen/IDE-låsen og kjør på nytt, eller kopier manuelt. "
-                    f"Feil: {last_error or copy_error}"
-                )
-                return 1
-        if replaced:
-            print(f"Oppdatert {OUTPUT_DB}")
+        return replace_output_db(working_db)
+    return 0
+
+
+def replace_output_db(working_db: Path) -> int:
+    import shutil
+    import time
+
+    replaced = False
+    last_error: Exception | None = None
+    for _attempt in range(8):
+        try:
+            if OUTPUT_DB.exists():
+                OUTPUT_DB.unlink()
+            working_db.replace(OUTPUT_DB)
+            replaced = True
+            break
+        except OSError as error:
+            last_error = error
+            time.sleep(0.75)
+    if not replaced:
+        try:
+            shutil.copy2(working_db, OUTPUT_DB)
+            print(f"Kopierte til {OUTPUT_DB} (replace var låst).")
+            working_db.unlink(missing_ok=True)
+            replaced = True
+        except OSError as copy_error:
+            print(
+                f"Klarte ikke å erstatte {OUTPUT_DB} (filen er trolig låst). "
+                f"Ny database ligger i {working_db}. "
+                f"Lukk appen/IDE-låsen og kjør på nytt, eller kopier manuelt. "
+                f"Feil: {last_error or copy_error}"
+            )
+            return 1
+    if replaced:
+        print(f"Oppdatert {OUTPUT_DB}")
     return 0
 
 

@@ -11,6 +11,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Science
@@ -32,12 +33,14 @@ import no.roadnotifications.settings.AlertPreferences
 import no.roadnotifications.ui.AlertsSettingsScreen
 import no.roadnotifications.ui.HomeScreen
 import no.roadnotifications.ui.TestAlertsScreen
+import no.roadnotifications.ui.TripLogScreen
 import no.roadnotifications.ui.theme.RoadNotificationsTheme
 
 private enum class MainTab {
     Home,
     Varsler,
     Test,
+    Logg,
 }
 
 class MainActivity : ComponentActivity() {
@@ -124,6 +127,17 @@ class MainActivity : ComponentActivity() {
                                 },
                                 label = { Text("Test") },
                             )
+                            NavigationBarItem(
+                                selected = selectedTab == MainTab.Logg,
+                                onClick = { selectedTab = MainTab.Logg },
+                                icon = {
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Filled.List,
+                                        contentDescription = "Logg",
+                                    )
+                                },
+                                label = { Text("Logg") },
+                            )
                         }
                     },
                 ) { innerPadding ->
@@ -155,6 +169,7 @@ class MainActivity : ComponentActivity() {
                                     vegNotificationManager.postTestCombinedAlert()
                                 },
                             )
+                            MainTab.Logg -> TripLogScreen()
                         }
                     }
                 }
