@@ -158,6 +158,7 @@ fun TestAlertsScreen(
                 category.type == VegObjektType.BOM.name -> "42"
                 category.type == VegObjektType.JERNBANE.name -> "I plan"
                 category.type == VegObjektType.FERJEKAI.name -> "Dokka"
+                category.type == VegObjektType.STREKNINGS_ATK.name -> "Lærdalstunnelen"
                 else -> category.verdi
             }
             val label = when (category.type) {

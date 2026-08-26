@@ -39,7 +39,7 @@ Heads-up alerts on Android Auto:
 | --- | --- |
 | Speed limits | 30–110 km/h |
 | Priority road | Forkjørsvei / end of forkjørsvei |
-| Speed cameras | Fotoboks (ATK) |
+| Speed cameras | Fotoboks (ATK-punkt), strekningsmåling (gjennomsnittsfart) |
 | Tolls | Bomstasjon (with price when available) |
 | Wildlife | Elg, hjort, rein, rådyr |
 | Rail crossings | Planovergang |

@@ -68,6 +68,7 @@ BOM_PRICE_COLUMNS = (
 RETNING_COLUMNS = ("lok.retning",)
 FERJE_NAME_COLUMNS = ("egs.navn", "navn")
 JERNBANE_TYPE_COLUMNS = ("egs.type",)
+ATK_CONTROL_TYPE_COLUMNS = ("type trafikkontroll", "typetrafikkontroll")
 FERJE_STATUS_COLUMNS = ("egs.driftsstatus", "driftsstatus")
 SKILTNUMMER_COLUMNS = ("egs.skiltnummer", "skiltnummer")
 
@@ -77,6 +78,8 @@ SKILT_TYPES = (
     "SMALERE_VEG",
     "TUNNEL",
     "SLUTT_FORKJOERSVEI",
+    "VIKEPLIKT",
+    "FARLIG_VEGKRYSS",
 )
 
 csv.field_size_limit(min(sys.maxsize, 50_000_000))
@@ -101,7 +104,7 @@ def detect_type(filename: str) -> str | None:
     if "kommune" in normalized:
         return None
     if "influens" in normalized:
-        return None
+        return "STREKNINGS_ATK"
     if "skiltplate" in normalized:
         return detect_skiltplate_type(normalized)
     if any(token in normalized for token in ("jernbane", "planovergang")):
@@ -124,6 +127,14 @@ def detect_type(filename: str) -> str | None:
 def detect_skiltplate_type(normalized_filename: str) -> str | None:
     if "stopp" in normalized_filename:
         return "STOPP"
+    if "vikeplikt" in normalized_filename:
+        return "VIKEPLIKT"
+    if "farligvegkryss" in normalized_filename:
+        return "FARLIG_VEGKRYSS"
+    if "forkjorsvegslutt" in normalized_filename or (
+        "slutt" in normalized_filename and "forkjor" in normalized_filename
+    ):
+        return "SLUTT_FORKJOERSVEI"
     if any(
         token in normalized_filename
         for token in ("100.1", "100.2", "102.1", "102.2")
@@ -135,6 +146,8 @@ def detect_skiltplate_type(normalized_filename: str) -> str | None:
         return "SLUTT_FORKJOERSVEI"
     if "206" in normalized_filename:
         return "FORKJOERSVEI"
+    if "124" in normalized_filename:
+        return "FARLIG_VEGKRYSS"
     if "122" in normalized_filename:
         return "TUNNEL"
     return None
@@ -416,7 +429,7 @@ def alert_coordinates(
     Forkjørsvei and fartsgrense stretches can be kilometers long. Alert at the
     entrance for the relevant travel direction instead of the geometric midpoint.
     """
-    if objekt_type in {"FORKJOERSVEI", "SLUTT_FORKJOERSVEI", "FART"}:
+    if objekt_type in {"FORKJOERSVEI", "SLUTT_FORKJOERSVEI", "FART", "STREKNINGS_ATK"}:
         if (retning or "").upper() == "MOT":
             return float(geometry["end_lat"]), float(geometry["end_lon"])
         return float(geometry["start_lat"]), float(geometry["start_lon"])
@@ -427,7 +440,7 @@ def pack_stretch_points(
     objekt_type: str,
     geometry: dict[str, float | None],
 ) -> bytes | None:
-    if objekt_type not in {"FART", "FORKJOERSVEI"}:
+    if objekt_type not in {"FART", "FORKJOERSVEI", "STREKNINGS_ATK"}:
         return None
     raw_points = geometry.get("points")
     if not isinstance(raw_points, list) or len(raw_points) < 2:
@@ -469,6 +482,12 @@ def should_keep_row(
             return True
         raw = str(row.get(column, "")).strip().lower()
         return raw != "nedlagt"
+    if objekt_type == "STREKNINGS_ATK":
+        column = find_column(columns, ATK_CONTROL_TYPE_COLUMNS)
+        if column is None:
+            return False
+        raw = normalize_key(str(row.get(column, ""))).replace("-", "")
+        return "strekningsatk" in raw
     return True
 
 
@@ -534,6 +553,12 @@ def value_for_type(
             raw = str(row.get(column, "")).strip()
             return raw or None
         return None
+    if objekt_type == "STREKNINGS_ATK":
+        column = find_column(columns, FERJE_NAME_COLUMNS)
+        if column:
+            raw = str(row.get(column, "")).strip()
+            return raw or None
+        return None
     if objekt_type == "JERNBANE":
         column = find_column(columns, JERNBANE_TYPE_COLUMNS)
         if column:
@@ -562,6 +587,8 @@ def skiltnummer_from_filename(filename: str) -> str | None:
         "106.2",
         "106.3",
         "122",
+        "124",
+        "202",
         "208",
         "206",
         "204",
@@ -652,7 +679,7 @@ def import_csv(
             latitude, longitude = alert_coordinates(objekt_type, retning, geometry)
             points_blob = pack_stretch_points(objekt_type, geometry)
             row_id = objekt_id
-            if objekt_type == "FORKJOERSVEI":
+            if objekt_type in {"FORKJOERSVEI", "STREKNINGS_ATK"}:
                 occurrence = forkjoersvei_occurrences.get(objekt_id, 0)
                 forkjoersvei_occurrences[objekt_id] = occurrence + 1
                 row_id = forkjoersvei_row_id(objekt_id, occurrence)
@@ -752,7 +779,7 @@ def rebuild_segment_rtree(connection: sqlite3.Connection) -> None:
     segment_rows: list[tuple[int, int]] = []
     rtree_rows: list[tuple[int, float, float, float, float]] = []
     rows = connection.execute(
-        "SELECT id, points FROM vegobjekt WHERE type IN ('FART', 'FORKJOERSVEI') AND points IS NOT NULL"
+        "SELECT id, points FROM vegobjekt WHERE type IN ('FART', 'FORKJOERSVEI', 'STREKNINGS_ATK') AND points IS NOT NULL"
     )
     for objekt_id, blob in rows:
         points = unpack_stretch_points(blob)
@@ -799,6 +826,117 @@ def rebuild_segment_rtree(connection: sqlite3.Connection) -> None:
             rtree_rows,
         )
     print(f"Strekning-indeks ferdig: {segment_id - 1} segmenter", flush=True)
+
+
+def append_stretch_index(connection: sqlite3.Connection, types: set[str]) -> None:
+    """Add polyline segments for [types] without rebuilding FART/FORKJOERSVEI."""
+    if not types:
+        return
+    connection.execute(CREATE_VEGOBJEKT_SEG)
+    connection.execute(CREATE_VEGOBJEKT_SEG_RTREE)
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS index_vegobjekt_seg_objektId ON vegobjekt_seg(objektId)"
+    )
+    start_id_row = connection.execute(
+        "SELECT COALESCE(MAX(segId), 0) FROM vegobjekt_seg"
+    ).fetchone()
+    segment_id = int(start_id_row[0] if start_id_row else 0) + 1
+    pad_degrees = 0.00025
+    segment_rows: list[tuple[int, int]] = []
+    rtree_rows: list[tuple[int, float, float, float, float]] = []
+    placeholders = ",".join("?" for _ in types)
+    rows = connection.execute(
+        f"SELECT id, points FROM vegobjekt WHERE type IN ({placeholders}) AND points IS NOT NULL",
+        tuple(sorted(types)),
+    )
+    first_id = segment_id
+    for objekt_id, blob in rows:
+        points = unpack_stretch_points(blob)
+        for index in range(len(points) - 1):
+            start_latitude, start_longitude = points[index]
+            end_latitude, end_longitude = points[index + 1]
+            segment_rows.append((segment_id, objekt_id))
+            rtree_rows.append(
+                (
+                    segment_id,
+                    min(start_latitude, end_latitude) - pad_degrees,
+                    max(start_latitude, end_latitude) + pad_degrees,
+                    min(start_longitude, end_longitude) - pad_degrees,
+                    max(start_longitude, end_longitude) + pad_degrees,
+                )
+            )
+            segment_id += 1
+            if len(segment_rows) >= 8_000:
+                connection.executemany(
+                    "INSERT INTO vegobjekt_seg(segId, objektId) VALUES (?, ?)",
+                    segment_rows,
+                )
+                connection.executemany(
+                    """
+                    INSERT INTO vegobjekt_seg_rtree(segId, minLat, maxLat, minLon, maxLon)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    rtree_rows,
+                )
+                segment_rows.clear()
+                rtree_rows.clear()
+                connection.commit()
+    if segment_rows:
+        connection.executemany(
+            "INSERT INTO vegobjekt_seg(segId, objektId) VALUES (?, ?)",
+            segment_rows,
+        )
+        connection.executemany(
+            """
+            INSERT INTO vegobjekt_seg_rtree(segId, minLat, maxLat, minLon, maxLon)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            rtree_rows,
+        )
+    print(
+        f"Strekning-indeks utvidet: {segment_id - first_id} nye segmenter "
+        f"({', '.join(sorted(types))})",
+        flush=True,
+    )
+
+
+def delete_segments_for_types(connection: sqlite3.Connection, types: set[str]) -> None:
+    placeholders = ",".join("?" for _ in types)
+    objekt_ids = [
+        row[0]
+        for row in connection.execute(
+            f"SELECT id FROM vegobjekt WHERE type IN ({placeholders})",
+            tuple(sorted(types)),
+        )
+    ]
+    if not objekt_ids:
+        return
+    table_exists = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='vegobjekt_seg'"
+    ).fetchone()
+    if table_exists is None:
+        return
+    for offset in range(0, len(objekt_ids), 400):
+        chunk = objekt_ids[offset : offset + 400]
+        id_placeholders = ",".join("?" for _ in chunk)
+        seg_ids = [
+            row[0]
+            for row in connection.execute(
+                f"SELECT segId FROM vegobjekt_seg WHERE objektId IN ({id_placeholders})",
+                chunk,
+            )
+        ]
+        if not seg_ids:
+            continue
+        seg_placeholders = ",".join("?" for _ in seg_ids)
+        connection.execute(
+            f"DELETE FROM vegobjekt_seg WHERE segId IN ({seg_placeholders})",
+            seg_ids,
+        )
+        connection.execute(
+            f"DELETE FROM vegobjekt_seg_rtree WHERE segId IN ({seg_placeholders})",
+            seg_ids,
+        )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -856,6 +994,7 @@ def main(argv: list[str] | None = None) -> int:
         shutil.copy2(OUTPUT_DB, working_db)
         connection = sqlite3.connect(working_db)
         placeholders = ",".join("?" for _ in only_types)
+        delete_segments_for_types(connection, only_types)
         deleted = connection.execute(
             f"DELETE FROM vegobjekt WHERE type IN ({placeholders})",
             tuple(sorted(only_types)),
@@ -874,7 +1013,13 @@ def main(argv: list[str] | None = None) -> int:
                 continue
             total += import_csv(csv_path, connection, forkjoersvei_occurrences)
         rebuild_rtree(connection)
-        rebuild_segment_rtree(connection)
+        stretch_types = {"FART", "FORKJOERSVEI", "STREKNINGS_ATK"}
+        if only_types is None:
+            rebuild_segment_rtree(connection)
+        elif stretch_types & only_types:
+            append_stretch_index(connection, stretch_types & only_types)
+        else:
+            print("Hopper over strekning-indeks (ingen FART/FORKJOERSVEI/STREKNINGS_ATK-endring).")
         connection.commit()
         print(f"Skrev {total} rader til {working_db}")
     finally:

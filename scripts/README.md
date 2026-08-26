@@ -29,7 +29,8 @@ Filtype styres av filnavnet (store/små bokstaver og æ/ø/å er OK):
 | Innhold i filnavn | Type i Room |
 | --- | --- |
 | `fart`, `fartsgrense` | `FART` |
-| `foto`, `atk`, `fotoboks` | `FOTOBOKS` |
+| `foto`, `atk`, `fotoboks` | `FOTOBOKS` (ATK-punkt) |
+| `influens` | `STREKNINGS_ATK` (kun rader merket Streknings-ATK) |
 | `bom`, `bomstasjon` | `BOM` (takst liten bil i `verdi`) |
 | `forkjor`, `forkjør` | `FORKJOERSVEI` |
 | `vilt`, `elg`, `hjort` | `VILTFARE` |
@@ -39,9 +40,11 @@ Filtype styres av filnavnet (store/små bokstaver og æ/ø/å er OK):
 | `skiltplate` + `100.*`/`102.*` | `FARLIG_SVING` |
 | `skiltplate` + `106.*` | `SMALERE_VEG` |
 | `skiltplate` + `122` | `TUNNEL` |
-| `skiltplate` + `208` | `SLUTT_FORKJOERSVEI` |
+| `skiltplate` + `124` / `farligvegkryss` | `FARLIG_VEGKRYSS` |
+| `skiltplate` + `vikeplikt` | `VIKEPLIKT` |
+| `skiltplate` + `208` / `forkjørsvegslutt` | `SLUTT_FORKJOERSVEI` |
 
-`Kommune_*.csv` og `*influens*` hoppes over (kommuner er ikke vegobjekter; ATK-influensstrekning dekkes av ATK-punkt).
+`Kommune_*.csv` hoppes over (kommuner er ikke vegobjekter). ATK-influensstrekning importeres som `STREKNINGS_ATK` når `EGS.TYPE TRAFIKKONTROLL` er Streknings-ATK; vanlige punkt-ATK-soner i samme fil hoppes over.
 
 Eksempler: `Fartsgrense_105-eksport OSLO.csv`, `ATK-punkt_162-eksport ATK-PUNKT.csv`, `Jernbanekryssing_100-eksport JERNBANE.csv`.
 
@@ -52,7 +55,7 @@ Eksempler: `Fartsgrense_105-eksport OSLO.csv`, `ATK-punkt_162-eksport ATK-PUNKT.
 - **Retning:** `LOK.RETNING` (`MED`/`MOT`); `vegRetningGrader` fra LINESTRING (MET-retning)
 - **Fart:** `EGS.FARTSGRENSE (KM/H).*`
 - **Vilt:** `EGS.ART.*` (`Elg`, `Hjort`, `Rein`, `Rådyr`)
-- **Ferje:** `EGS.NAVN.*`
+- **Ferje / streknings-ATK:** `EGS.NAVN.*`
 - **Jernbane:** `EGS.TYPE.*`
 
 ## Room-hash

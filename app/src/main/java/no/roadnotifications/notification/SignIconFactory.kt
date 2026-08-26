@@ -44,13 +44,16 @@ object SignIconFactory {
             VegObjektType.FORKJOERSVEI.name -> R.drawable.sign_206
             VegObjektType.SLUTT_FORKJOERSVEI.name -> R.drawable.sign_208
             VegObjektType.STOPP.name -> R.drawable.sign_204
+            VegObjektType.VIKEPLIKT.name -> R.drawable.sign_202
             VegObjektType.FARLIG_SVING.name -> farligSvingDrawableRes(verdi)
+            VegObjektType.FARLIG_VEGKRYSS.name -> R.drawable.sign_124
             VegObjektType.SMALERE_VEG.name -> smalereVegDrawableRes(verdi)
             VegObjektType.TUNNEL.name -> R.drawable.sign_122
             VegObjektType.JERNBANE.name -> R.drawable.sign_134
             VegObjektType.FERJEKAI.name -> R.drawable.sign_120
             VegObjektType.VILTFARE.name -> wildlifeDrawableRes(verdi)
             VegObjektType.FOTOBOKS.name -> R.drawable.sign_556
+            VegObjektType.STREKNINGS_ATK.name -> R.drawable.sign_556_2
             VegObjektType.BOM.name -> R.drawable.sign_792_30
             else -> 0
         }
@@ -148,7 +151,17 @@ object SignIconFactory {
     private fun drawableToBitmap(drawable: Drawable, width: Int, height: Int): Bitmap {
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
-        drawable.setBounds(0, 0, width, height)
+        val intrinsicWidth = drawable.intrinsicWidth.coerceAtLeast(1)
+        val intrinsicHeight = drawable.intrinsicHeight.coerceAtLeast(1)
+        val scale = minOf(
+            width / intrinsicWidth.toFloat(),
+            height / intrinsicHeight.toFloat(),
+        )
+        val drawWidth = (intrinsicWidth * scale).toInt().coerceAtLeast(1)
+        val drawHeight = (intrinsicHeight * scale).toInt().coerceAtLeast(1)
+        val left = (width - drawWidth) / 2
+        val top = (height - drawHeight) / 2
+        drawable.setBounds(left, top, left + drawWidth, top + drawHeight)
         drawable.draw(canvas)
         return bitmap
     }

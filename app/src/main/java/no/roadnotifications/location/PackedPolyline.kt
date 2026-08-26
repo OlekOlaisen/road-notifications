@@ -3,6 +3,11 @@ package no.roadnotifications.location
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
+data class ClosestSegment(
+    val distanceMeters: Float,
+    val segmentHeadingDegrees: Float,
+)
+
 object PackedPolyline {
     fun unpack(blob: ByteArray?): List<RoadLatLon> {
         if (blob == null || blob.size < 12) {
@@ -27,30 +32,44 @@ object PackedPolyline {
         longitude: Double,
         points: List<RoadLatLon>,
     ): Float {
+        return closestSegment(
+            latitude = latitude,
+            longitude = longitude,
+            points = points,
+        )?.distanceMeters ?: Float.MAX_VALUE
+    }
+
+    fun closestSegment(
+        latitude: Double,
+        longitude: Double,
+        points: List<RoadLatLon>,
+    ): ClosestSegment? {
         if (points.size < 2) {
-            return Float.MAX_VALUE
+            return null
         }
-        var closestMeters = Float.MAX_VALUE
+        var closest: ClosestSegment? = null
         for (index in 0 until points.lastIndex) {
-            val distanceMeters = distanceToSegmentMeters(
+            val candidate = projectOntoSegment(
                 latitude = latitude,
                 longitude = longitude,
                 start = points[index],
                 end = points[index + 1],
-            )
-            if (distanceMeters < closestMeters) {
-                closestMeters = distanceMeters
+            ) ?: continue
+            val closerThanBest = closest == null ||
+                candidate.distanceMeters < closest.distanceMeters
+            if (closerThanBest) {
+                closest = candidate
             }
         }
-        return closestMeters
+        return closest
     }
 
-    private fun distanceToSegmentMeters(
+    private fun projectOntoSegment(
         latitude: Double,
         longitude: Double,
         start: RoadLatLon,
         end: RoadLatLon,
-    ): Float {
+    ): ClosestSegment? {
         val segment = FloatArray(2)
         android.location.Location.distanceBetween(
             start.latitude,
@@ -60,13 +79,9 @@ object PackedPolyline {
             segment,
         )
         val segmentLengthMeters = segment[0]
+        val segmentHeadingDegrees = segment[1]
         if (segmentLengthMeters < 0.5f) {
-            return LocationDistance.distanceMeters(
-                latitude,
-                longitude,
-                start.latitude,
-                start.longitude,
-            )
+            return null
         }
         val fromStart = FloatArray(2)
         android.location.Location.distanceBetween(
@@ -77,17 +92,20 @@ object PackedPolyline {
             fromStart,
         )
         val headingDeltaRadians = Math.toRadians(
-            LocationDistance.headingDeltaDegrees(segment[1], fromStart[1]).toDouble(),
+            LocationDistance.headingDeltaDegrees(segmentHeadingDegrees, fromStart[1]).toDouble(),
         )
         val alongTrackMeters = fromStart[0] * kotlin.math.cos(headingDeltaRadians)
         val fraction = (alongTrackMeters / segmentLengthMeters).toFloat().coerceIn(0f, 1f)
         val snappedLatitude = start.latitude + ((end.latitude - start.latitude) * fraction)
         val snappedLongitude = start.longitude + ((end.longitude - start.longitude) * fraction)
-        return LocationDistance.distanceMeters(
-            latitude,
-            longitude,
-            snappedLatitude,
-            snappedLongitude,
+        return ClosestSegment(
+            distanceMeters = LocationDistance.distanceMeters(
+                latitude,
+                longitude,
+                snappedLatitude,
+                snappedLongitude,
+            ),
+            segmentHeadingDegrees = segmentHeadingDegrees,
         )
     }
 }

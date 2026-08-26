@@ -35,6 +35,11 @@ object AlertCategories {
             signDrawableRes = R.drawable.sign_556,
         ),
         category(
+            type = VegObjektType.STREKNINGS_ATK.name,
+            label = "Strekningsmåling",
+            signDrawableRes = R.drawable.sign_556_2,
+        ),
+        category(
             type = VegObjektType.BOM.name,
             label = "Bomstasjon",
             signDrawableRes = R.drawable.sign_792_30,
@@ -86,6 +91,12 @@ object AlertCategories {
             signDrawableRes = R.drawable.sign_204,
         ),
         category(
+            type = VegObjektType.VIKEPLIKT.name,
+            verdi = "202",
+            label = "Vikeplikt",
+            signDrawableRes = R.drawable.sign_202,
+        ),
+        category(
             type = VegObjektType.FARLIG_SVING.name,
             verdi = "100.1",
             label = "Farlig sving — høyre",
@@ -108,6 +119,12 @@ object AlertCategories {
             verdi = "102.2",
             label = "Farlige svinger — venstre",
             signDrawableRes = R.drawable.sign_102_2,
+        ),
+        category(
+            type = VegObjektType.FARLIG_VEGKRYSS.name,
+            verdi = "124",
+            label = "Farlig vegkryss",
+            signDrawableRes = R.drawable.sign_124,
         ),
         category(
             type = VegObjektType.SMALERE_VEG.name,

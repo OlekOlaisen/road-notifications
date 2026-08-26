@@ -46,30 +46,35 @@ def clean_path_data(path_data: str) -> str:
     return cleaned
 
 
-def svg_to_vector(svg_text: str, resource_name: str) -> str:
+def svg_to_vector(svg_text: str, resource_name: str, keep_white_group: bool = False) -> str:
     viewbox = VIEWBOX_RE.search(svg_text)
     if viewbox is None:
         raise ValueError(f"Missing viewBox for {resource_name}")
     width = int(float(viewbox.group(3)))
     height = int(float(viewbox.group(4)))
 
-    # Drop white corner/background group entirely.
-    without_white_group = re.sub(
-        r'<g id="#ffffffff">.*?</g>',
-        "",
-        svg_text,
-        flags=re.DOTALL,
-    )
+    working_svg = svg_text
+    if not keep_white_group:
+        # Drop the pure-white background group used as a cut-out plate
+        # on square warning signs. Underskilts like 556.2 keep it because
+        # the SATK letters live in that group.
+        working_svg = re.sub(
+            r'<g id="#ffffffff">.*?</g>',
+            "",
+            svg_text,
+            flags=re.DOTALL,
+        )
 
     path_blocks: list[str] = []
-    for fill, opacity, path_data in PATH_RE.findall(without_white_group):
+    for fill, opacity, path_data in PATH_RE.findall(working_svg):
         fill_lower = fill.lower()
-        if fill_lower in WHITE_FILLS:
+        is_corner_leftover = "M 0.00 0.00" in path_data or "L 0.00 0.00" in path_data
+        if fill_lower in WHITE_FILLS and not keep_white_group:
             continue
-        if fill_lower in {"#fbfbfb", "#fafafa"} and opacity == "1.00":
-            # Near-white corner leftovers in some exports.
-            if "M 0.00 0.00" in path_data or "L 0.00 0.00" in path_data:
-                continue
+        if fill_lower in WHITE_FILLS and is_corner_leftover:
+            continue
+        if fill_lower in {"#fbfbfb", "#fafafa"} and opacity == "1.00" and is_corner_leftover:
+            continue
         alpha = float(opacity)
         fill_color = fill_lower
         if alpha < 0.999:
@@ -77,21 +82,37 @@ def svg_to_vector(svg_text: str, resource_name: str) -> str:
             rgb = fill_lower.lstrip("#")
             if len(rgb) == 6:
                 fill_color = f"#{alpha_byte:02x}{rgb}"
+        fill_type_attr = (
+            '        android:fillType="evenOdd"\n' if keep_white_group else ""
+        )
         path_blocks.append(
             "    <path\n"
             f'        android:fillColor="{fill_color}"\n'
+            f"{fill_type_attr}"
             f'        android:pathData="{clean_path_data(path_data)}" />'
         )
 
     if not path_blocks:
         raise ValueError(f"No drawable paths left for {resource_name}")
 
+    max_dp = 192
+    if keep_white_group:
+        if width >= height:
+            width_dp = max_dp
+            height_dp = max(1, round(max_dp * height / width))
+        else:
+            height_dp = max_dp
+            width_dp = max(1, round(max_dp * width / height))
+    else:
+        width_dp = min(width, max_dp)
+        height_dp = min(height, max_dp)
+
     body = "\n".join(path_blocks)
     return (
         '<?xml version="1.0" encoding="utf-8"?>\n'
         "<vector xmlns:android=\"http://schemas.android.com/apk/res/android\"\n"
-        f'    android:width="{min(width, 192)}dp"\n'
-        f'    android:height="{min(height, 192)}dp"\n'
+        f'    android:width="{width_dp}dp"\n'
+        f'    android:height="{height_dp}dp"\n'
         f'    android:viewportWidth="{width}"\n'
         f'    android:viewportHeight="{height}">\n'
         f"{body}\n"
@@ -113,8 +134,11 @@ def resolve_sources() -> dict[str, Path]:
         "sign_106_3": find_svg("106_3", "106_3.svg"),
         "sign_120": find_svg("120_0", "120_0.svg"),
         "sign_122": find_svg("122_0", "122_0.svg"),
+        "sign_124": find_svg("124_0", "124_0.svg"),
+        "sign_202": find_svg("202_0", "202_0.svg"),
         "sign_134": find_svg("134_0", "134_0.svg"),
         "sign_556": find_svg("556_0", "556_0.svg"),
+        "sign_556_2": find_svg("556_2", "556_2.svg"),
         "sign_792_30": find_svg("792_30", "792_30.svg"),
     }
     for index in range(1, 6):
@@ -133,7 +157,11 @@ def main() -> None:
     sources = resolve_sources()
     converted = 0
     for resource_name, svg_path in sources.items():
-        vector_xml = svg_to_vector(svg_path.read_text(encoding="utf-8"), resource_name)
+        vector_xml = svg_to_vector(
+            svg_path.read_text(encoding="utf-8"),
+            resource_name,
+            keep_white_group=resource_name == "sign_556_2",
+        )
         target = DST / f"{resource_name}.xml"
         target.write_text(vector_xml, encoding="utf-8")
         print(f"OK {resource_name}.xml <- {svg_path.name} ({len(vector_xml)} bytes)")

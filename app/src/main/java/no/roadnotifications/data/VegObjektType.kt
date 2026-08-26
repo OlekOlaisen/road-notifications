@@ -3,6 +3,7 @@ package no.roadnotifications.data
 enum class VegObjektType {
     FART,
     FOTOBOKS,
+    STREKNINGS_ATK,
     BOM,
     FORKJOERSVEI,
     VILTFARE,
@@ -13,4 +14,6 @@ enum class VegObjektType {
     SMALERE_VEG,
     TUNNEL,
     SLUTT_FORKJOERSVEI,
+    VIKEPLIKT,
+    FARLIG_VEGKRYSS,
 }

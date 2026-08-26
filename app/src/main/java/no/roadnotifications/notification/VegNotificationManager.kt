@@ -8,8 +8,6 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
-import android.location.Location
-import android.os.SystemClock
 import android.widget.RemoteViews
 import androidx.car.app.notification.CarAppExtender
 import androidx.car.app.notification.CarNotificationManager
@@ -29,8 +27,6 @@ import no.roadnotifications.data.VegObjektType
 import no.roadnotifications.location.LocationDistance
 import no.roadnotifications.log.TripLog
 import no.roadnotifications.settings.AlertPreferences
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.TimeUnit
 
 data class AlertCandidate(
     val vegObjekt: VegObjektEntity,
@@ -40,8 +36,13 @@ data class AlertCandidate(
 class VegNotificationManager(private val context: Context) {
     private val carNotificationManager = CarNotificationManager.from(context)
     private val alertPreferences = AlertPreferences(context)
+    private val alertPassTracker = AlertPassTracker()
 
-    fun notifyIfNeeded(candidates: List<AlertCandidate>, currentLocation: Location): Boolean {
+    fun notifyIfNeeded(
+        candidates: List<AlertCandidate>,
+        matchingObjektIds: Set<Long>,
+    ): List<AlertCandidate> {
+        alertPassTracker.prepareTick(matchingObjektIds)
         val enabled = candidates.filter { candidate ->
             alertPreferences.isEnabled(
                 candidate.vegObjekt.type,
@@ -56,33 +57,35 @@ class VegNotificationManager(private val context: Context) {
                 },
             )
         }
-        val passingCooldown = enabled.filter { candidate ->
-            shouldNotify(candidate.vegObjekt, currentLocation)
+        val passingOncePerPass = enabled.filter { candidate ->
+            alertPassTracker.shouldNotify(candidate.vegObjekt.id)
         }
-        val cooledDown = enabled.filter { candidate -> candidate !in passingCooldown }
-        if (cooledDown.isNotEmpty()) {
+        val alreadyAlertedThisPass = enabled.filter { candidate ->
+            candidate !in passingOncePerPass
+        }
+        if (alreadyAlertedThisPass.isNotEmpty()) {
             TripLog.append(
-                "SKIP cooldown=" + cooledDown.joinToString(",") { candidate ->
+                "SKIP already-alerted=" + alreadyAlertedThisPass.joinToString(",") { candidate ->
                     TripLog.formatObjekt(candidate.vegObjekt)
                 },
             )
         }
-        val toNotify = passingCooldown.sortedBy { candidate ->
+        val toNotify = passingOncePerPass.sortedBy { candidate ->
             messageOrder(candidate.vegObjekt.type)
         }
         if (toNotify.isEmpty()) {
-            return false
+            return emptyList()
         }
         postAlert(toNotify)
         toNotify.forEach { candidate ->
-            rememberNotification(candidate.vegObjekt, currentLocation)
+            alertPassTracker.remember(candidate.vegObjekt.id)
         }
         TripLog.append(
             "ALERT " + toNotify.joinToString(",") { candidate ->
                 TripLog.formatObjekt(candidate.vegObjekt)
             },
         )
-        return true
+        return toNotify
     }
 
     fun postTestAlert(type: String, verdi: String?) {
@@ -356,13 +359,16 @@ class VegNotificationManager(private val context: Context) {
                 VegObjektType.FART.name ->
                     if (verdi.isBlank()) "Fartsgrense" else "Fartsgrense $verdi"
                 VegObjektType.FOTOBOKS.name -> "Fotoboks"
+                VegObjektType.STREKNINGS_ATK.name -> "Strekningsmåling"
                 VegObjektType.BOM.name -> "Bomstasjon"
                 VegObjektType.FORKJOERSVEI.name -> "Forkjørsvei"
                 VegObjektType.VILTFARE.name -> wildlifeTitle(verdi)
                 VegObjektType.JERNBANE.name -> "Jernbaneovergang"
                 VegObjektType.FERJEKAI.name -> "Ferjekai"
                 VegObjektType.STOPP.name -> "Stopp"
+                VegObjektType.VIKEPLIKT.name -> "Vikeplikt"
                 VegObjektType.FARLIG_SVING.name -> farligSvingTitle(verdi)
+                VegObjektType.FARLIG_VEGKRYSS.name -> "Farlig vegkryss"
                 VegObjektType.SMALERE_VEG.name -> smalereVegTitle(verdi)
                 VegObjektType.TUNNEL.name -> "Tunnel"
                 VegObjektType.SLUTT_FORKJOERSVEI.name -> "Slutt på forkjørsvei"
@@ -375,6 +381,8 @@ class VegNotificationManager(private val context: Context) {
             return when (vegObjekt.type) {
                 VegObjektType.FOTOBOKS.name ->
                     distanceSubtitle(alongTrackMeters) ?: "Fotoboks foran"
+                VegObjektType.STREKNINGS_ATK.name ->
+                    if (verdi.isBlank()) "Gjennomsnittsfart foran" else verdi
                 VegObjektType.BOM.name -> bomSubtitle(verdi)
                 VegObjektType.FART.name -> ""
                 VegObjektType.FORKJOERSVEI.name -> "Forkjørsvei foran"
@@ -384,7 +392,9 @@ class VegNotificationManager(private val context: Context) {
                 VegObjektType.FERJEKAI.name ->
                     if (verdi.isBlank()) "Ferjekai foran" else verdi
                 VegObjektType.STOPP.name -> "Stopplikt foran"
+                VegObjektType.VIKEPLIKT.name -> "Vikeplikt foran"
                 VegObjektType.FARLIG_SVING.name -> "Reduser farten"
+                VegObjektType.FARLIG_VEGKRYSS.name -> "Farlig kryss foran"
                 VegObjektType.SMALERE_VEG.name -> "Vegen smalner"
                 VegObjektType.TUNNEL.name -> "Tunnel foran"
                 VegObjektType.SLUTT_FORKJOERSVEI.name -> "Forkjørsvei opphører"
@@ -462,12 +472,19 @@ class VegNotificationManager(private val context: Context) {
         private fun sampleDistanceMeters(objektType: String): Float? {
             return when (objektType) {
                 VegObjektType.FOTOBOKS.name -> 250f
+                VegObjektType.STREKNINGS_ATK.name -> LocationDistance.AT_SIGN_ALONG_TRACK_METERS
                 VegObjektType.JERNBANE.name -> 180f
                 VegObjektType.FERJEKAI.name -> 120f
-                VegObjektType.FARLIG_SVING.name -> 100f
+                VegObjektType.FARLIG_SVING.name -> 80f
+                VegObjektType.FARLIG_VEGKRYSS.name -> 80f
                 VegObjektType.TUNNEL.name -> 140f
                 VegObjektType.SMALERE_VEG.name -> 70f
                 VegObjektType.STOPP.name -> 50f
+                VegObjektType.VIKEPLIKT.name -> LocationDistance.AT_SIGN_ALONG_TRACK_METERS
+                VegObjektType.BOM.name -> LocationDistance.AT_SIGN_ALONG_TRACK_METERS
+                VegObjektType.VILTFARE.name -> LocationDistance.AT_SIGN_ALONG_TRACK_METERS
+                VegObjektType.FORKJOERSVEI.name -> LocationDistance.AT_SIGN_ALONG_TRACK_METERS
+                VegObjektType.SLUTT_FORKJOERSVEI.name -> LocationDistance.AT_SIGN_ALONG_TRACK_METERS
                 else -> null
             }
         }
@@ -476,17 +493,20 @@ class VegNotificationManager(private val context: Context) {
             return when (type) {
                 VegObjektType.JERNBANE.name -> 0
                 VegObjektType.STOPP.name -> 1
-                VegObjektType.FARLIG_SVING.name -> 2
-                VegObjektType.FORKJOERSVEI.name -> 3
-                VegObjektType.SLUTT_FORKJOERSVEI.name -> 4
-                VegObjektType.FART.name -> 5
-                VegObjektType.TUNNEL.name -> 6
-                VegObjektType.SMALERE_VEG.name -> 7
-                VegObjektType.FOTOBOKS.name -> 8
-                VegObjektType.BOM.name -> 9
-                VegObjektType.FERJEKAI.name -> 10
-                VegObjektType.VILTFARE.name -> 11
-                else -> 12
+                VegObjektType.VIKEPLIKT.name -> 2
+                VegObjektType.FARLIG_SVING.name -> 3
+                VegObjektType.FARLIG_VEGKRYSS.name -> 4
+                VegObjektType.FORKJOERSVEI.name -> 5
+                VegObjektType.SLUTT_FORKJOERSVEI.name -> 6
+                VegObjektType.FART.name -> 7
+                VegObjektType.TUNNEL.name -> 8
+                VegObjektType.SMALERE_VEG.name -> 9
+                VegObjektType.FOTOBOKS.name -> 10
+                VegObjektType.STREKNINGS_ATK.name -> 10
+                VegObjektType.BOM.name -> 11
+                VegObjektType.FERJEKAI.name -> 12
+                VegObjektType.VILTFARE.name -> 13
+                else -> 14
             }
         }
 
@@ -494,38 +514,26 @@ class VegNotificationManager(private val context: Context) {
             return when (type) {
                 VegObjektType.JERNBANE.name -> 0
                 VegObjektType.STOPP.name -> 1
-                VegObjektType.FARLIG_SVING.name -> 2
-                VegObjektType.VILTFARE.name -> 3
-                VegObjektType.FOTOBOKS.name -> 4
-                VegObjektType.TUNNEL.name -> 5
-                VegObjektType.FORKJOERSVEI.name -> 6
-                VegObjektType.SLUTT_FORKJOERSVEI.name -> 7
-                VegObjektType.SMALERE_VEG.name -> 8
-                VegObjektType.BOM.name -> 9
-                VegObjektType.FERJEKAI.name -> 10
-                VegObjektType.FART.name -> 11
-                else -> 12
+                VegObjektType.VIKEPLIKT.name -> 2
+                VegObjektType.FARLIG_SVING.name -> 3
+                VegObjektType.FARLIG_VEGKRYSS.name -> 4
+                VegObjektType.VILTFARE.name -> 5
+                VegObjektType.FOTOBOKS.name -> 6
+                VegObjektType.STREKNINGS_ATK.name -> 6
+                VegObjektType.TUNNEL.name -> 7
+                VegObjektType.FORKJOERSVEI.name -> 8
+                VegObjektType.SLUTT_FORKJOERSVEI.name -> 9
+                VegObjektType.SMALERE_VEG.name -> 10
+                VegObjektType.BOM.name -> 11
+                VegObjektType.FERJEKAI.name -> 12
+                VegObjektType.FART.name -> 13
+                else -> 14
             }
         }
         private const val PHONE_CONTENT_REQUEST_CODE = 0
         private const val CAR_CONTENT_REQUEST_CODE = 10
         private const val REPLY_REQUEST_CODE = 11
         private const val MARK_AS_READ_REQUEST_CODE = 12
-
-        private val COOLDOWN_MS_DEFAULT = TimeUnit.MINUTES.toMillis(2)
-        private const val COOLDOWN_DISTANCE_METERS_DEFAULT = 350f
-
-        private data class NotificationMemory(
-            val elapsedRealtimeMs: Long,
-            val latitude: Double,
-            val longitude: Double,
-        )
-
-        @Volatile
-        private var lastNotifiedObjektId: Long? = null
-
-        private val lastNotificationByObjektId = ConcurrentHashMap<Long, NotificationMemory>()
-        private val lastNotificationByTypeKey = ConcurrentHashMap<String, NotificationMemory>()
 
         fun createChannels(context: Context) {
             val manager = ContextCompat.getSystemService(context, NotificationManager::class.java)
@@ -572,87 +580,6 @@ class VegNotificationManager(private val context: Context) {
                 .setCategory(NotificationCompat.CATEGORY_SERVICE)
                 .setContentIntent(contentIntent)
                 .build()
-        }
-
-        private fun shouldNotify(vegObjekt: VegObjektEntity, currentLocation: Location): Boolean {
-            if (vegObjekt.id == lastNotifiedObjektId) {
-                return false
-            }
-            val previousForObjekt = lastNotificationByObjektId[vegObjekt.id]
-            if (previousForObjekt != null &&
-                !cooldownExpired(previousForObjekt, currentLocation, vegObjekt.type)
-            ) {
-                return false
-            }
-            val typeKey = typeKeyFor(vegObjekt)
-            val previousForType = lastNotificationByTypeKey[typeKey]
-            if (previousForType != null &&
-                !cooldownExpired(previousForType, currentLocation, vegObjekt.type)
-            ) {
-                return false
-            }
-            return true
-        }
-
-        private fun cooldownExpired(
-            previous: NotificationMemory,
-            currentLocation: Location,
-            objektType: String,
-        ): Boolean {
-            val elapsedEnough =
-                SystemClock.elapsedRealtime() - previous.elapsedRealtimeMs >=
-                    cooldownDurationMs(objektType)
-            val movedEnough = LocationDistance.distanceMeters(
-                previous.latitude,
-                previous.longitude,
-                currentLocation.latitude,
-                currentLocation.longitude,
-            ) >= cooldownDistanceMeters(objektType)
-            return elapsedEnough || movedEnough
-        }
-
-        private fun cooldownDurationMs(objektType: String): Long {
-            return when (objektType) {
-                VegObjektType.FOTOBOKS.name -> TimeUnit.MINUTES.toMillis(3)
-                VegObjektType.FART.name -> TimeUnit.SECONDS.toMillis(90)
-                VegObjektType.FARLIG_SVING.name -> TimeUnit.SECONDS.toMillis(90)
-                VegObjektType.STOPP.name -> TimeUnit.SECONDS.toMillis(90)
-                else -> COOLDOWN_MS_DEFAULT
-            }
-        }
-
-        private fun cooldownDistanceMeters(objektType: String): Float {
-            return when (objektType) {
-                VegObjektType.FOTOBOKS.name -> 800f
-                VegObjektType.FART.name -> 250f
-                VegObjektType.VILTFARE.name -> 500f
-                VegObjektType.FARLIG_SVING.name -> 400f
-                VegObjektType.TUNNEL.name -> 600f
-                else -> COOLDOWN_DISTANCE_METERS_DEFAULT
-            }
-        }
-
-        private fun rememberNotification(vegObjekt: VegObjektEntity, currentLocation: Location) {
-            val memory = NotificationMemory(
-                elapsedRealtimeMs = SystemClock.elapsedRealtime(),
-                latitude = currentLocation.latitude,
-                longitude = currentLocation.longitude,
-            )
-            lastNotifiedObjektId = vegObjekt.id
-            lastNotificationByObjektId[vegObjekt.id] = memory
-            lastNotificationByTypeKey[typeKeyFor(vegObjekt)] = memory
-        }
-
-        private fun typeKeyFor(vegObjekt: VegObjektEntity): String {
-            val verdi = vegObjekt.verdi?.trim().orEmpty()
-            return when (vegObjekt.type) {
-                VegObjektType.FART.name,
-                VegObjektType.VILTFARE.name,
-                VegObjektType.FARLIG_SVING.name,
-                VegObjektType.SMALERE_VEG.name,
-                -> "${vegObjekt.type}:$verdi"
-                else -> vegObjekt.type
-            }
         }
     }
 }

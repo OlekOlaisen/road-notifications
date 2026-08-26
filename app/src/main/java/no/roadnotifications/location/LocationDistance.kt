@@ -59,6 +59,12 @@ object LocationDistance {
      */
     const val MIN_ALONG_TRACK_METERS = -40f
 
+    /**
+     * Signs that should fire at the plate / boom, not as advance warning.
+     * A few meters of lead covers GPS lag without becoming a 70–120 m preview.
+     */
+    const val AT_SIGN_ALONG_TRACK_METERS = 20f
+
     private const val MIN_HEADING_SPEED_METERS_PER_SECOND = 1.5f
     private const val MIN_HEADING_MOVEMENT_METERS = 5f
     private const val METERS_PER_DEGREE_LATITUDE = 111_320.0
@@ -99,17 +105,20 @@ object LocationDistance {
     fun alertAlongTrackMeters(objektType: String): Float {
         return when (objektType) {
             VegObjektType.FART.name -> 90f
-            VegObjektType.FORKJOERSVEI.name -> 120f
-            VegObjektType.BOM.name -> 70f
-            VegObjektType.VILTFARE.name -> 120f
+            VegObjektType.FORKJOERSVEI.name -> AT_SIGN_ALONG_TRACK_METERS
+            VegObjektType.BOM.name -> AT_SIGN_ALONG_TRACK_METERS
+            VegObjektType.VILTFARE.name -> AT_SIGN_ALONG_TRACK_METERS
             VegObjektType.FOTOBOKS.name -> 350f
+            VegObjektType.STREKNINGS_ATK.name -> AT_SIGN_ALONG_TRACK_METERS
             VegObjektType.JERNBANE.name -> 200f
             VegObjektType.FERJEKAI.name -> 150f
             VegObjektType.STOPP.name -> 80f
-            VegObjektType.FARLIG_SVING.name -> 130f
+            VegObjektType.VIKEPLIKT.name -> AT_SIGN_ALONG_TRACK_METERS
+            VegObjektType.FARLIG_SVING.name -> 80f
+            VegObjektType.FARLIG_VEGKRYSS.name -> 80f
             VegObjektType.SMALERE_VEG.name -> 90f
             VegObjektType.TUNNEL.name -> 160f
-            VegObjektType.SLUTT_FORKJOERSVEI.name -> 120f
+            VegObjektType.SLUTT_FORKJOERSVEI.name -> AT_SIGN_ALONG_TRACK_METERS
             else -> 70f
         }
     }
@@ -208,7 +217,7 @@ object LocationDistance {
         val absoluteMaxCrossTrackMeters = maxCrossTrackMeters(objektType)
         if (objektType == VegObjektType.FART.name ||
             objektType == VegObjektType.FORKJOERSVEI.name ||
-            objektType == VegObjektType.SLUTT_FORKJOERSVEI.name
+            objektType == VegObjektType.STREKNINGS_ATK.name
         ) {
             return absoluteMaxCrossTrackMeters
         }
@@ -224,16 +233,19 @@ object LocationDistance {
         return when (objektType) {
             VegObjektType.FART.name -> 24f
             VegObjektType.FORKJOERSVEI.name -> 35f
-            VegObjektType.BOM.name -> 25f
+            VegObjektType.BOM.name -> 18f
             VegObjektType.FOTOBOKS.name -> 28f
-            VegObjektType.VILTFARE.name -> 45f
+            VegObjektType.STREKNINGS_ATK.name -> 28f
+            VegObjektType.VILTFARE.name -> 22f
             VegObjektType.JERNBANE.name -> 30f
             VegObjektType.FERJEKAI.name -> 40f
             VegObjektType.STOPP.name -> 22f
+            VegObjektType.VIKEPLIKT.name -> 14f
             VegObjektType.FARLIG_SVING.name -> 28f
+            VegObjektType.FARLIG_VEGKRYSS.name -> 26f
             VegObjektType.SMALERE_VEG.name -> 22f
             VegObjektType.TUNNEL.name -> 35f
-            VegObjektType.SLUTT_FORKJOERSVEI.name -> 35f
+            VegObjektType.SLUTT_FORKJOERSVEI.name -> 16f
             else -> 20f
         }
     }
@@ -242,16 +254,19 @@ object LocationDistance {
         return when (objektType) {
             VegObjektType.FART.name -> 25f
             VegObjektType.FORKJOERSVEI.name -> 32f
-            VegObjektType.BOM.name -> 22f
+            VegObjektType.BOM.name -> 18f
             VegObjektType.FOTOBOKS.name -> 20f
-            VegObjektType.VILTFARE.name -> 30f
+            VegObjektType.STREKNINGS_ATK.name -> 20f
+            VegObjektType.VILTFARE.name -> 22f
             VegObjektType.JERNBANE.name -> 25f
             VegObjektType.FERJEKAI.name -> 35f
             VegObjektType.STOPP.name -> 22f
+            VegObjektType.VIKEPLIKT.name -> 16f
             VegObjektType.FARLIG_SVING.name -> 25f
+            VegObjektType.FARLIG_VEGKRYSS.name -> 24f
             VegObjektType.SMALERE_VEG.name -> 22f
             VegObjektType.TUNNEL.name -> 30f
-            VegObjektType.SLUTT_FORKJOERSVEI.name -> 32f
+            VegObjektType.SLUTT_FORKJOERSVEI.name -> 20f
             else -> 20f
         }
     }
@@ -262,7 +277,8 @@ object LocationDistance {
 
     fun isStretchType(objektType: String): Boolean {
         return objektType == VegObjektType.FART.name ||
-            objektType == VegObjektType.FORKJOERSVEI.name
+            objektType == VegObjektType.FORKJOERSVEI.name ||
+            objektType == VegObjektType.STREKNINGS_ATK.name
     }
 
     fun headingDegrees(currentLocation: Location, previousLocation: Location?): Float? {
