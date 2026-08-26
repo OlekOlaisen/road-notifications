@@ -33,7 +33,8 @@
         <service
             android:name=".service.VegTrackingService"
             android:exported="false"
-            android:foregroundServiceType="location" />
+            android:foregroundServiceType="location"
+            android:stopWithTask="true" />
 
         <service
             android:name=".car.VegCarAppService"

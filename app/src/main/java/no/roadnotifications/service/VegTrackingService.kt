@@ -84,13 +84,20 @@ class VegTrackingService : LifecycleService() {
         startAsForeground()
         startLocationUpdates()
         TripLog.append("SERVICE start")
-        return START_STICKY
+        return START_NOT_STICKY
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        TripLog.append("SERVICE task removed")
+        stopSelf()
+        super.onTaskRemoved(rootIntent)
     }
 
     override fun onDestroy() {
         fusedLocationClient.removeLocationUpdates(locationCallback)
         roadMatcher?.close()
         roadMatcher = null
+        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         TripLog.append("SERVICE stop")
         super.onDestroy()
     }
