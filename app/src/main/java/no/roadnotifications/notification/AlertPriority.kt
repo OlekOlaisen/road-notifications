@@ -49,7 +49,8 @@ object AlertPriority {
             VegObjektType.FERJEKAI.name -> 11
             VegObjektType.VILTFARE.name -> 12
             VegObjektType.SLUTT_FORKJOERSVEI.name -> 13
-            else -> 14
+            VegObjektType.KOMMUNE.name -> 14
+            else -> 15
         }
     }
 
@@ -70,7 +71,8 @@ object AlertPriority {
             VegObjektType.BOM.name -> 11
             VegObjektType.FERJEKAI.name -> 12
             VegObjektType.FART.name -> 13
-            else -> 14
+            VegObjektType.KOMMUNE.name -> 14
+            else -> 15
         }
     }
 

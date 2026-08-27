@@ -22,6 +22,7 @@ object SignIconFactory {
         }
         return when (vegObjekt.type) {
             VegObjektType.FART.name -> speedLimitBitmap(vegObjekt.verdi)
+            VegObjektType.KOMMUNE.name -> placeNameBitmap(vegObjekt.verdi)
             else -> drawableBitmap(context, R.drawable.ic_sign_generic)
         }
     }
@@ -101,6 +102,47 @@ object SignIconFactory {
             "RADYR" -> R.drawable.sign_146_4
             else -> R.drawable.sign_146_5
         }
+    }
+
+    private fun placeNameBitmap(verdi: String?): Bitmap {
+        val nameText = verdi?.trim().orEmpty().ifBlank { "Kommune" }
+        val bitmap = Bitmap.createBitmap(ICON_SIZE_PX, ICON_SIZE_PX, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        val plateLeft = 8f
+        val plateTop = 48f
+        val plateRight = ICON_SIZE_PX - 8f
+        val plateBottom = ICON_SIZE_PX - 48f
+        val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.BLACK
+            style = Paint.Style.FILL
+        }
+        canvas.drawRoundRect(plateLeft, plateTop, plateRight, plateBottom, 10f, 10f, borderPaint)
+        val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            style = Paint.Style.FILL
+        }
+        canvas.drawRoundRect(
+            plateLeft + 6f,
+            plateTop + 6f,
+            plateRight - 6f,
+            plateBottom - 6f,
+            6f,
+            6f,
+            fillPaint,
+        )
+        val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.BLACK
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.NORMAL)
+            textAlign = Paint.Align.CENTER
+            textSize = when {
+                nameText.length <= 8 -> 36f
+                nameText.length <= 14 -> 28f
+                else -> 22f
+            }
+        }
+        val textY = ICON_SIZE_PX / 2f - (textPaint.descent() + textPaint.ascent()) / 2f
+        canvas.drawText(nameText, ICON_SIZE_PX / 2f, textY, textPaint)
+        return bitmap
     }
 
     private fun speedLimitBitmap(verdi: String?): Bitmap {

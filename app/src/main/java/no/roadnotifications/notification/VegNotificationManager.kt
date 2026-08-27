@@ -87,7 +87,11 @@ class VegNotificationManager(private val context: Context) {
             )
         }
         passingOncePerPass.forEach { candidate ->
-            alertPassTracker.remember(candidate.vegObjekt.id)
+            val suppressedKommune = candidate in suppressedByPriority &&
+                candidate.vegObjekt.type == VegObjektType.KOMMUNE.name
+            if (!suppressedKommune) {
+                alertPassTracker.remember(candidate.vegObjekt.id)
+            }
         }
         val toNotify = selected.sortedBy { candidate ->
             AlertPriority.messageOrder(candidate.vegObjekt.type)
@@ -393,6 +397,8 @@ class VegNotificationManager(private val context: Context) {
                 VegObjektType.SMALERE_VEG.name -> smalereVegTitle(verdi)
                 VegObjektType.TUNNEL.name -> "Tunnel"
                 VegObjektType.SLUTT_FORKJOERSVEI.name -> "Slutt på forkjørsvei"
+                VegObjektType.KOMMUNE.name ->
+                    if (verdi.isBlank()) "Ny kommune" else verdi
                 else -> "Vegobjekt i nærheten"
             }
         }
@@ -419,6 +425,7 @@ class VegNotificationManager(private val context: Context) {
                 VegObjektType.SMALERE_VEG.name -> "Vegen smalner"
                 VegObjektType.TUNNEL.name -> "Tunnel foran"
                 VegObjektType.SLUTT_FORKJOERSVEI.name -> "Forkjørsvei opphører"
+                VegObjektType.KOMMUNE.name -> "Ny kommune"
                 else -> "Objekt foran"
             }
         }

@@ -43,8 +43,9 @@ Filtype styres av filnavnet (store/små bokstaver og æ/ø/å er OK):
 | `skiltplate` + `124` / `farligvegkryss` | `FARLIG_VEGKRYSS` |
 | `skiltplate` + `vikeplikt` | `VIKEPLIKT` |
 | `skiltplate` + `208` / `forkjørsvegslutt` | `SLUTT_FORKJOERSVEI` |
+| `kommune` | `KOMMUNE` (flate-geometri, varsel ved ny kommune) |
 
-`Kommune_*.csv` hoppes over (kommuner er ikke vegobjekter). ATK-influensstrekning importeres som `STREKNINGS_ATK` når `EGS.TYPE TRAFIKKONTROLL` er Streknings-ATK; vanlige punkt-ATK-soner i samme fil hoppes over.
+ATK-influensstrekning importeres som `STREKNINGS_ATK` når `EGS.TYPE TRAFIKKONTROLL` er Streknings-ATK; vanlige punkt-ATK-soner i samme fil hoppes over.
 
 Eksempler: `Fartsgrense_105-eksport OSLO.csv`, `ATK-punkt_162-eksport ATK-PUNKT.csv`, `Jernbanekryssing_100-eksport JERNBANE.csv`.
 
@@ -56,6 +57,7 @@ Eksempler: `Fartsgrense_105-eksport OSLO.csv`, `ATK-punkt_162-eksport ATK-PUNKT.
 - **Fart:** `EGS.FARTSGRENSE (KM/H).*`
 - **Vilt:** `EGS.ART.*` (`Elg`, `Hjort`, `Rein`, `Rådyr`)
 - **Ferje / streknings-ATK:** `EGS.NAVN.*`
+- **Kommune:** `EGS.KOMMUNENAVN.*` (flate i `GEO.GEOMETRI` / `EGS.GEOMETRI, FLATE.*`)
 - **Jernbane:** `EGS.TYPE.*`
 
 ## Room-hash

@@ -27,6 +27,7 @@ import no.roadnotifications.data.VegObjektDao
 import no.roadnotifications.data.VegObjektEntity
 import no.roadnotifications.data.VegObjektType
 import no.roadnotifications.location.BoundingBox
+import no.roadnotifications.location.KommuneMatcher
 import no.roadnotifications.location.LocationDistance
 import no.roadnotifications.location.PackedPolyline
 import no.roadnotifications.location.RoadMatcher
@@ -47,6 +48,8 @@ class VegTrackingService : LifecycleService() {
     private var lastCheckedLocation: Location? = null
     private var activeStretchIds: Set<Long> = emptySet()
     private var lastOnRoadFartVerdi: String? = null
+    private var lastKommuneId: Long? = null
+    private var pendingKommuneAlert: VegObjektEntity? = null
     private val forkjoersveiStayTracker = ForkjoersveiStayTracker()
     private val strekningsAtkStayTracker = ForkjoersveiStayTracker()
 
@@ -238,6 +241,9 @@ class VegTrackingService : LifecycleService() {
             )
             val nearbyPathOffsets = nearby
                 .mapNotNull { vegObjekt ->
+                    if (vegObjekt.type == VegObjektType.KOMMUNE.name) {
+                        return@mapNotNull null
+                    }
                     val pathOffset = LocationDistance.travelPathOffset(
                         currentLocation = queryLocation,
                         previousLocation = previousLocation,
@@ -331,7 +337,61 @@ class VegTrackingService : LifecycleService() {
             } else {
                 emptyList()
             }
-            val closestByType = (pathMatches + stretchMatches + speedLimitMatch)
+            val gpsAccuracyTooPoor = queryLocation.hasAccuracy() &&
+                queryLocation.accuracy > LocationDistance.MAX_GPS_ACCURACY_METERS
+            val currentKommune = if (gpsAccuracyTooPoor) {
+                null
+            } else {
+                val kommuneCandidates = try {
+                    dao.kommunerContaining(
+                        latitude = queryLocation.latitude,
+                        longitude = queryLocation.longitude,
+                    )
+                } catch (error: Throwable) {
+                    TripLog.append(
+                        "ERROR kommune ${error.javaClass.simpleName}: ${error.message}",
+                    )
+                    emptyList()
+                }
+                KommuneMatcher.pickCurrent(
+                    candidates = kommuneCandidates,
+                    latitude = queryLocation.latitude,
+                    longitude = queryLocation.longitude,
+                )
+            }
+            val enteredKommune = if (
+                currentKommune != null &&
+                lastKommuneId != null &&
+                currentKommune.id != lastKommuneId
+            ) {
+                currentKommune
+            } else {
+                null
+            }
+            if (currentKommune != null) {
+                lastKommuneId = currentKommune.id
+            }
+            if (enteredKommune != null) {
+                pendingKommuneAlert = enteredKommune
+            }
+            if (pendingKommuneAlert != null &&
+                currentKommune != null &&
+                pendingKommuneAlert?.id != currentKommune.id
+            ) {
+                pendingKommuneAlert = null
+            }
+            val kommuneMatch = pendingKommuneAlert?.let { vegObjekt ->
+                listOf(
+                    vegObjekt to TravelPathOffset(
+                        distanceMeters = 0f,
+                        alongTrackMeters = 0f,
+                        crossTrackMeters = 0f,
+                        headingDeltaDegrees = 0f,
+                        travelHeadingDegrees = travelHeadingDegrees ?: 0f,
+                    ),
+                )
+            } ?: emptyList()
+            val closestByType = (pathMatches + stretchMatches + speedLimitMatch + kommuneMatch)
                 .groupBy { (vegObjekt, _) -> vegObjekt.type }
                 .map { (_, typedObjects) ->
                     typedObjects.minWith(
@@ -367,13 +427,20 @@ class VegTrackingService : LifecycleService() {
             val matchingObjektIds = (
                 allPathMatches.map { (vegObjekt, _) -> vegObjekt.id } +
                     stretchMatches.map { (vegObjekt, _) -> vegObjekt.id } +
-                    speedLimitMatch.map { (vegObjekt, _) -> vegObjekt.id }
+                    speedLimitMatch.map { (vegObjekt, _) -> vegObjekt.id } +
+                    listOfNotNull(pendingKommuneAlert?.id)
                 ).toSet()
             val notified = vegNotificationManager.notifyIfNeeded(
                 candidates,
                 matchingObjektIds,
                 higherImportanceApproaching = higherImportanceApproaching,
             )
+            if (notified.any { candidate ->
+                    candidate.vegObjekt.type == VegObjektType.KOMMUNE.name
+                }
+            ) {
+                pendingKommuneAlert = null
+            }
             if (notified.any { candidate ->
                     candidate.vegObjekt.type == VegObjektType.FORKJOERSVEI.name
                 }

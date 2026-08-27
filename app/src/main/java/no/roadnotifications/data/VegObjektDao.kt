@@ -47,4 +47,17 @@ interface VegObjektDao {
 
     @Query("SELECT * FROM vegobjekt WHERE id IN (:ids)")
     suspend fun byIds(ids: List<Long>): List<VegObjektEntity>
+
+    @Query(
+        """
+        SELECT * FROM vegobjekt
+        WHERE type = 'KOMMUNE'
+          AND minLat <= :latitude AND maxLat >= :latitude
+          AND minLon <= :longitude AND maxLon >= :longitude
+        """,
+    )
+    suspend fun kommunerContaining(
+        latitude: Double,
+        longitude: Double,
+    ): List<VegObjektEntity>
 }

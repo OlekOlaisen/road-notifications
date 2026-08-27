@@ -159,6 +159,7 @@ fun TestAlertsScreen(
                 category.type == VegObjektType.JERNBANE.name -> "I plan"
                 category.type == VegObjektType.FERJEKAI.name -> "Dokka"
                 category.type == VegObjektType.STREKNINGS_ATK.name -> "Lærdalstunnelen"
+                category.type == VegObjektType.KOMMUNE.name -> "Oslo"
                 else -> category.verdi
             }
             val label = when (category.type) {

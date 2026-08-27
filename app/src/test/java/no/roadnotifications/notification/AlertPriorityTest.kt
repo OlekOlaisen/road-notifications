@@ -43,6 +43,7 @@ class AlertPriorityTest {
             VegObjektType.BOM.name,
             VegObjektType.FERJEKAI.name,
             VegObjektType.SLUTT_FORKJOERSVEI.name,
+            VegObjektType.KOMMUNE.name,
         )
         for (objektType in lowTypes) {
             assertEquals(objektType, AlertImportance.LOW, AlertPriority.importance(objektType))

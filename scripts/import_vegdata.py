@@ -67,6 +67,13 @@ BOM_PRICE_COLUMNS = (
 )
 RETNING_COLUMNS = ("lok.retning",)
 FERJE_NAME_COLUMNS = ("egs.navn", "navn")
+KOMMUNE_NAME_COLUMNS = ("kommunenavn",)
+KOMMUNE_NUMBER_COLUMNS = ("kommunenummer",)
+KOMMUNE_FLATE_COLUMNS = (
+    "geo.geometri",
+    "geometri, flate",
+    "lok.geometri",
+)
 JERNBANE_TYPE_COLUMNS = ("egs.type",)
 ATK_CONTROL_TYPE_COLUMNS = ("type trafikkontroll", "typetrafikkontroll")
 FERJE_STATUS_COLUMNS = ("egs.driftsstatus", "driftsstatus")
@@ -102,7 +109,7 @@ def normalize_key(name: str) -> str:
 def detect_type(filename: str) -> str | None:
     normalized = normalize_key(filename)
     if "kommune" in normalized:
-        return None
+        return "KOMMUNE"
     if "influens" in normalized:
         return "STREKNINGS_ATK"
     if "skiltplate" in normalized:
@@ -436,6 +443,117 @@ def alert_coordinates(
     return float(geometry["centroid_lat"]), float(geometry["centroid_lon"])
 
 
+def parse_wkt_rings(wkt: str) -> list[list[tuple[float, float]]]:
+    rings: list[list[tuple[float, float]]] = []
+    open_indexes: list[int] = []
+    for index, character in enumerate(wkt):
+        if character == "(":
+            open_indexes.append(index)
+        elif character == ")" and open_indexes:
+            start_index = open_indexes.pop()
+            content = wkt[start_index + 1 : index]
+            if "(" in content:
+                continue
+            points = parse_wkt_projected_points(f"({content})")
+            if len(points) >= 3:
+                rings.append(points)
+    return rings
+
+
+def ring_bbox_area(points: list[tuple[float, float]]) -> float:
+    eastings = [point[0] for point in points]
+    northings = [point[1] for point in points]
+    return (max(eastings) - min(eastings)) * (max(northings) - min(northings))
+
+
+def convert_projected_points(
+    points: list[tuple[float, float]],
+) -> list[tuple[float, float]]:
+    converted: list[tuple[float, float]] = []
+    for x_value, y_value in points:
+        if looks_like_utm(x_value, y_value):
+            latitude, longitude = utm33_to_wgs84(x_value, y_value)
+        else:
+            longitude, latitude = x_value, y_value
+        converted.append((latitude, longitude))
+    return converted
+
+
+def kommune_geometry_from_row(
+    row: dict[str, str],
+    columns: list[str],
+) -> dict[str, float | list[list[tuple[float, float]]] | None] | None:
+    rings_wgs: list[list[tuple[float, float]]] = []
+    for wkt_name in KOMMUNE_FLATE_COLUMNS:
+        column = find_column(columns, (wkt_name,))
+        if column is None:
+            continue
+        projected_rings = parse_wkt_rings(str(row.get(column, "")))
+        if not projected_rings:
+            continue
+        simplified_rings = sorted(
+            projected_rings,
+            key=ring_bbox_area,
+            reverse=True,
+        )[:32]
+        for projected_ring in simplified_rings:
+            sampled = resample_projected_points(
+                projected_ring,
+                spacing_meters=120.0,
+                max_points=256,
+            )
+            wgs_ring = convert_projected_points(sampled)
+            if len(wgs_ring) >= 3:
+                rings_wgs.append(wgs_ring)
+        if rings_wgs:
+            break
+    if not rings_wgs:
+        return None
+    latitudes = [latitude for ring in rings_wgs for latitude, _ in ring]
+    longitudes = [longitude for ring in rings_wgs for _, longitude in ring]
+    largest_ring = max(rings_wgs, key=len)
+    centroid_lat = sum(latitude for latitude, _ in largest_ring) / len(largest_ring)
+    centroid_lon = sum(longitude for _, longitude in largest_ring) / len(largest_ring)
+    return {
+        "start_lat": largest_ring[0][0],
+        "start_lon": largest_ring[0][1],
+        "end_lat": largest_ring[-1][0],
+        "end_lon": largest_ring[-1][1],
+        "centroid_lat": centroid_lat,
+        "centroid_lon": centroid_lon,
+        "min_lat": min(latitudes),
+        "max_lat": max(latitudes),
+        "min_lon": min(longitudes),
+        "max_lon": max(longitudes),
+        "veg_retning_grader": None,
+        "points": largest_ring,
+        "rings": rings_wgs,
+    }
+
+
+def pack_polygon_rings(geometry: dict[str, float | list | None]) -> bytes | None:
+    raw_rings = geometry.get("rings")
+    if not isinstance(raw_rings, list):
+        return None
+    rings = [
+        ring
+        for ring in raw_rings
+        if isinstance(ring, list) and len(ring) >= 3
+    ]
+    if not rings:
+        return None
+    packed = struct.pack("<I", len(rings))
+    for ring in rings:
+        packed += struct.pack("<I", len(ring))
+        for latitude, longitude in ring:
+            packed += struct.pack(
+                "<ii",
+                int(round(float(latitude) * 1_000_000.0)),
+                int(round(float(longitude) * 1_000_000.0)),
+            )
+    return packed
+
+
 def pack_stretch_points(
     objekt_type: str,
     geometry: dict[str, float | None],
@@ -559,6 +677,18 @@ def value_for_type(
             raw = str(row.get(column, "")).strip()
             return raw or None
         return None
+    if objekt_type == "KOMMUNE":
+        name_column = find_column(columns, KOMMUNE_NAME_COLUMNS)
+        if name_column:
+            raw = str(row.get(name_column, "")).strip()
+            if raw:
+                return raw
+        number_column = find_column(columns, KOMMUNE_NUMBER_COLUMNS)
+        if number_column:
+            raw = str(row.get(number_column, "")).strip()
+            if raw:
+                return raw
+        return None
     if objekt_type == "JERNBANE":
         column = find_column(columns, JERNBANE_TYPE_COLUMNS)
         if column:
@@ -670,14 +800,20 @@ def import_csv(
                 skipped += 1
                 continue
             objekt_id = parse_id(string_row, columns)
-            geometry = geometry_from_row(string_row, columns)
+            if objekt_type == "KOMMUNE":
+                geometry = kommune_geometry_from_row(string_row, columns)
+            else:
+                geometry = geometry_from_row(string_row, columns)
             if objekt_id is None or geometry is None:
                 skipped += 1
                 continue
             verdi = value_for_type(string_row, columns, objekt_type, path.name)
             retning = retning_from_row(string_row, columns)
             latitude, longitude = alert_coordinates(objekt_type, retning, geometry)
-            points_blob = pack_stretch_points(objekt_type, geometry)
+            if objekt_type == "KOMMUNE":
+                points_blob = pack_polygon_rings(geometry)
+            else:
+                points_blob = pack_stretch_points(objekt_type, geometry)
             row_id = objekt_id
             if objekt_type in {"FORKJOERSVEI", "STREKNINGS_ATK"}:
                 occurrence = forkjoersvei_occurrences.get(objekt_id, 0)

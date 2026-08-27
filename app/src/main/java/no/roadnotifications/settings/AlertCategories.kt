@@ -156,6 +156,11 @@ object AlertCategories {
             label = "Slutt på forkjørsvei",
             signDrawableRes = R.drawable.sign_208,
         ),
+        category(
+            type = VegObjektType.KOMMUNE.name,
+            label = "Ny kommune",
+            signDrawableRes = R.drawable.ic_sign_generic,
+        ),
     )
 
     private fun speed(speedLimit: String): AlertCategory {

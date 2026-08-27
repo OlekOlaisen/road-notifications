@@ -16,4 +16,5 @@ enum class VegObjektType {
     SLUTT_FORKJOERSVEI,
     VIKEPLIKT,
     FARLIG_VEGKRYSS,
+    KOMMUNE,
 }
