@@ -34,6 +34,7 @@ import no.roadnotifications.location.SpeedLimitMatcher
 import no.roadnotifications.location.TravelPathOffset
 import no.roadnotifications.log.TripLog
 import no.roadnotifications.notification.AlertCandidate
+import no.roadnotifications.notification.AlertPriority
 import no.roadnotifications.notification.ForkjoersveiStayTracker
 import no.roadnotifications.notification.VegNotificationManager
 import java.util.Locale
@@ -235,11 +236,8 @@ class VegTrackingService : LifecycleService() {
                 currentVerdi = currentSpeedLimit?.vegObjekt?.verdi,
                 previousVerdi = lastOnRoadFartVerdi,
             )
-            val allPathMatches = nearby
+            val nearbyPathOffsets = nearby
                 .mapNotNull { vegObjekt ->
-                    if (vegObjekt.type == VegObjektType.FART.name && currentSpeedLimit != null) {
-                        return@mapNotNull null
-                    }
                     val pathOffset = LocationDistance.travelPathOffset(
                         currentLocation = queryLocation,
                         previousLocation = previousLocation,
@@ -247,6 +245,13 @@ class VegTrackingService : LifecycleService() {
                         targetLongitude = vegObjekt.lon,
                         travelHeadingOverrideDegrees = travelHeadingDegrees,
                     ) ?: return@mapNotNull null
+                    vegObjekt to pathOffset
+                }
+            val allPathMatches = nearbyPathOffsets
+                .mapNotNull { (vegObjekt, pathOffset) ->
+                    if (vegObjekt.type == VegObjektType.FART.name && currentSpeedLimit != null) {
+                        return@mapNotNull null
+                    }
                     if (!LocationDistance.matchesTravelPath(
                             offset = pathOffset,
                             objektType = vegObjekt.type,
@@ -258,19 +263,30 @@ class VegTrackingService : LifecycleService() {
                     }
                     vegObjekt to pathOffset
                 }
+            val higherImportanceApproaching = nearbyPathOffsets.any { (vegObjekt, pathOffset) ->
+                AlertPriority.isLookaheadSuppressor(
+                    objektType = vegObjekt.type,
+                    offset = pathOffset,
+                    retning = vegObjekt.retning,
+                    vegRetningGrader = vegObjekt.vegRetningGrader,
+                )
+            }
             val prioritySignInWindow = allPathMatches.any { (vegObjekt, _) ->
                 vegObjekt.type == VegObjektType.FORKJOERSVEI.name
             }
             val strekningsAtkSignInWindow = allPathMatches.any { (vegObjekt, _) ->
                 vegObjekt.type == VegObjektType.STREKNINGS_ATK.name
             }
+            val nowElapsedRealtimeMs = SystemClock.elapsedRealtime()
             forkjoersveiStayTracker.onTick(
                 onPriorityRoad = onPriorityRoad,
                 prioritySignInWindow = prioritySignInWindow,
+                nowElapsedRealtimeMs = nowElapsedRealtimeMs,
             )
             strekningsAtkStayTracker.onTick(
                 onPriorityRoad = onStrekningsAtk,
                 prioritySignInWindow = strekningsAtkSignInWindow,
+                nowElapsedRealtimeMs = nowElapsedRealtimeMs,
             )
             val pathMatches = allPathMatches.filter { (vegObjekt, _) ->
                 when (vegObjekt.type) {
@@ -356,6 +372,7 @@ class VegTrackingService : LifecycleService() {
             val notified = vegNotificationManager.notifyIfNeeded(
                 candidates,
                 matchingObjektIds,
+                higherImportanceApproaching = higherImportanceApproaching,
             )
             if (notified.any { candidate ->
                     candidate.vegObjekt.type == VegObjektType.FORKJOERSVEI.name

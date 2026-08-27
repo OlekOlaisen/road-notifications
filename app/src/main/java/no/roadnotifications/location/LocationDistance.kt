@@ -65,6 +65,13 @@ object LocationDistance {
      */
     const val AT_SIGN_ALONG_TRACK_METERS = 20f
 
+    /**
+     * Yield plates sit at the give-way line, often a few meters off the
+     * centerline. Alert on the approach road before the turn, not only in
+     * the last 20 m where heading already swings into the crossing.
+     */
+    const val YIELD_ALONG_TRACK_METERS = 50f
+
     private const val MIN_HEADING_SPEED_METERS_PER_SECOND = 1.5f
     private const val MIN_HEADING_MOVEMENT_METERS = 5f
     private const val METERS_PER_DEGREE_LATITUDE = 111_320.0
@@ -113,7 +120,7 @@ object LocationDistance {
             VegObjektType.JERNBANE.name -> 200f
             VegObjektType.FERJEKAI.name -> 150f
             VegObjektType.STOPP.name -> 80f
-            VegObjektType.VIKEPLIKT.name -> AT_SIGN_ALONG_TRACK_METERS
+            VegObjektType.VIKEPLIKT.name -> YIELD_ALONG_TRACK_METERS
             VegObjektType.FARLIG_SVING.name -> 80f
             VegObjektType.FARLIG_VEGKRYSS.name -> 80f
             VegObjektType.SMALERE_VEG.name -> 90f
@@ -217,7 +224,8 @@ object LocationDistance {
         val absoluteMaxCrossTrackMeters = maxCrossTrackMeters(objektType)
         if (objektType == VegObjektType.FART.name ||
             objektType == VegObjektType.FORKJOERSVEI.name ||
-            objektType == VegObjektType.STREKNINGS_ATK.name
+            objektType == VegObjektType.STREKNINGS_ATK.name ||
+            objektType == VegObjektType.VIKEPLIKT.name
         ) {
             return absoluteMaxCrossTrackMeters
         }
@@ -240,7 +248,7 @@ object LocationDistance {
             VegObjektType.JERNBANE.name -> 30f
             VegObjektType.FERJEKAI.name -> 40f
             VegObjektType.STOPP.name -> 22f
-            VegObjektType.VIKEPLIKT.name -> 14f
+            VegObjektType.VIKEPLIKT.name -> 35f
             VegObjektType.FARLIG_SVING.name -> 28f
             VegObjektType.FARLIG_VEGKRYSS.name -> 26f
             VegObjektType.SMALERE_VEG.name -> 22f
@@ -261,7 +269,7 @@ object LocationDistance {
             VegObjektType.JERNBANE.name -> 25f
             VegObjektType.FERJEKAI.name -> 35f
             VegObjektType.STOPP.name -> 22f
-            VegObjektType.VIKEPLIKT.name -> 16f
+            VegObjektType.VIKEPLIKT.name -> 32f
             VegObjektType.FARLIG_SVING.name -> 25f
             VegObjektType.FARLIG_VEGKRYSS.name -> 24f
             VegObjektType.SMALERE_VEG.name -> 22f

@@ -41,6 +41,7 @@ class VegNotificationManager(private val context: Context) {
     fun notifyIfNeeded(
         candidates: List<AlertCandidate>,
         matchingObjektIds: Set<Long>,
+        higherImportanceApproaching: Boolean = false,
     ): List<AlertCandidate> {
         alertPassTracker.prepareTick(matchingObjektIds)
         val enabled = candidates.filter { candidate ->
@@ -70,16 +71,31 @@ class VegNotificationManager(private val context: Context) {
                 },
             )
         }
-        val toNotify = passingOncePerPass.sortedBy { candidate ->
-            messageOrder(candidate.vegObjekt.type)
+        val selected = AlertPriority.selectToNotify(
+            passingOncePerPass = passingOncePerPass,
+            candidatesInWindow = enabled,
+            higherImportanceApproaching = higherImportanceApproaching,
+        )
+        val suppressedByPriority = passingOncePerPass.filter { candidate ->
+            candidate !in selected
+        }
+        if (suppressedByPriority.isNotEmpty()) {
+            TripLog.append(
+                "SKIP lower-priority=" + suppressedByPriority.joinToString(",") { candidate ->
+                    TripLog.formatObjekt(candidate.vegObjekt)
+                },
+            )
+        }
+        passingOncePerPass.forEach { candidate ->
+            alertPassTracker.remember(candidate.vegObjekt.id)
+        }
+        val toNotify = selected.sortedBy { candidate ->
+            AlertPriority.messageOrder(candidate.vegObjekt.type)
         }
         if (toNotify.isEmpty()) {
             return emptyList()
         }
         postAlert(toNotify)
-        toNotify.forEach { candidate ->
-            alertPassTracker.remember(candidate.vegObjekt.id)
-        }
         TripLog.append(
             "ALERT " + toNotify.joinToString(",") { candidate ->
                 TripLog.formatObjekt(candidate.vegObjekt)
@@ -123,10 +139,12 @@ class VegNotificationManager(private val context: Context) {
     }
 
     private fun postAlert(toNotify: List<AlertCandidate>) {
-        val orderedAlerts = toNotify.sortedBy { candidate -> messageOrder(candidate.vegObjekt.type) }
+        val orderedAlerts = toNotify.sortedBy { candidate ->
+            AlertPriority.messageOrder(candidate.vegObjekt.type)
+        }
         val (titleText, subtitleText) = titleAndSubtitleFor(orderedAlerts)
         val primaryObjekt = orderedAlerts
-            .minBy { candidate -> iconPriority(candidate.vegObjekt.type) }
+            .minBy { candidate -> AlertPriority.iconPriority(candidate.vegObjekt.type) }
             .vegObjekt
         val isWildlife = orderedAlerts.any { candidate ->
             candidate.vegObjekt.type == VegObjektType.VILTFARE.name
@@ -168,7 +186,10 @@ class VegNotificationManager(private val context: Context) {
         val fartAlert = orderedAlerts.find { candidate ->
             candidate.vegObjekt.type == VegObjektType.FART.name
         }
-        if (forkjoersveiAlert != null && fartAlert != null) {
+        val hasHighImportance = orderedAlerts.any { candidate ->
+            AlertPriority.importance(candidate.vegObjekt.type) == AlertImportance.HIGH
+        }
+        if (forkjoersveiAlert != null && fartAlert != null && !hasHighImportance) {
             val remainingAlerts = orderedAlerts.filter { candidate ->
                 candidate.vegObjekt.type != VegObjektType.FORKJOERSVEI.name &&
                     candidate.vegObjekt.type != VegObjektType.FART.name
@@ -480,7 +501,7 @@ class VegNotificationManager(private val context: Context) {
                 VegObjektType.TUNNEL.name -> 140f
                 VegObjektType.SMALERE_VEG.name -> 70f
                 VegObjektType.STOPP.name -> 50f
-                VegObjektType.VIKEPLIKT.name -> LocationDistance.AT_SIGN_ALONG_TRACK_METERS
+                VegObjektType.VIKEPLIKT.name -> LocationDistance.YIELD_ALONG_TRACK_METERS
                 VegObjektType.BOM.name -> LocationDistance.AT_SIGN_ALONG_TRACK_METERS
                 VegObjektType.VILTFARE.name -> LocationDistance.AT_SIGN_ALONG_TRACK_METERS
                 VegObjektType.FORKJOERSVEI.name -> LocationDistance.AT_SIGN_ALONG_TRACK_METERS
@@ -489,47 +510,6 @@ class VegNotificationManager(private val context: Context) {
             }
         }
 
-        private fun messageOrder(type: String): Int {
-            return when (type) {
-                VegObjektType.JERNBANE.name -> 0
-                VegObjektType.STOPP.name -> 1
-                VegObjektType.VIKEPLIKT.name -> 2
-                VegObjektType.FARLIG_SVING.name -> 3
-                VegObjektType.FARLIG_VEGKRYSS.name -> 4
-                VegObjektType.FORKJOERSVEI.name -> 5
-                VegObjektType.SLUTT_FORKJOERSVEI.name -> 6
-                VegObjektType.FART.name -> 7
-                VegObjektType.TUNNEL.name -> 8
-                VegObjektType.SMALERE_VEG.name -> 9
-                VegObjektType.FOTOBOKS.name -> 10
-                VegObjektType.STREKNINGS_ATK.name -> 10
-                VegObjektType.BOM.name -> 11
-                VegObjektType.FERJEKAI.name -> 12
-                VegObjektType.VILTFARE.name -> 13
-                else -> 14
-            }
-        }
-
-        private fun iconPriority(type: String): Int {
-            return when (type) {
-                VegObjektType.JERNBANE.name -> 0
-                VegObjektType.STOPP.name -> 1
-                VegObjektType.VIKEPLIKT.name -> 2
-                VegObjektType.FARLIG_SVING.name -> 3
-                VegObjektType.FARLIG_VEGKRYSS.name -> 4
-                VegObjektType.VILTFARE.name -> 5
-                VegObjektType.FOTOBOKS.name -> 6
-                VegObjektType.STREKNINGS_ATK.name -> 6
-                VegObjektType.TUNNEL.name -> 7
-                VegObjektType.FORKJOERSVEI.name -> 8
-                VegObjektType.SLUTT_FORKJOERSVEI.name -> 9
-                VegObjektType.SMALERE_VEG.name -> 10
-                VegObjektType.BOM.name -> 11
-                VegObjektType.FERJEKAI.name -> 12
-                VegObjektType.FART.name -> 13
-                else -> 14
-            }
-        }
         private const val PHONE_CONTENT_REQUEST_CODE = 0
         private const val CAR_CONTENT_REQUEST_CODE = 10
         private const val REPLY_REQUEST_CODE = 11
