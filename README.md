@@ -26,7 +26,7 @@ Heads-up alerts on Android Auto:
 
 ## Features
 
-- **Offline alerts** — no network required while driving; data ships in the APK (`vegdata.db`)
+- **Offline alerts** — no network required while driving; nationwide NVDB signs (`vegdata.db`) and the OSM road graph (`roadgraph.db`) ship inside the APK
 - **Android Auto heads-up** — MessagingStyle + Car App Library so alerts can appear over Maps
 - **Travel-path matching** — prefers objects ahead on your path, not every nearby side street
 - **Toggle categories** — enable/disable alert types (speed limits, priority road, speed cameras, wildlife, and more)
@@ -58,11 +58,13 @@ Data is imported from NVDB / Vegkart CSV exports into `app/src/main/assets/vegda
 
 ## Download
 
-Pre-built release APKs are published on [GitHub Releases](https://github.com/OlekOlaisen/road-notifications/releases).
+Pre-built APKs are on [GitHub Releases](https://github.com/OlekOlaisen/road-notifications/releases) (not GitHub Packages). Each APK is about **1.4 GB** because it includes the nationwide sign database and road graph.
 
 1. Open the latest release and download `app-release.apk`.
 2. On your phone, allow **Install unknown apps** for your browser or file manager.
-3. Open the APK to install. For updates, install over the existing app (same signing key).
+3. Open the APK to install. First launch copies the databases into app storage, so keep several GB free. For updates, install over the existing app (same signing key).
+
+A git clone does **not** include `vegdata.db` or `roadgraph.db` (they are gitignored). Use a release APK unless you import the data locally.
 
 For **Android Auto**, also enable developer settings and allow unknown sources for sideloaded apps (see below).
 
@@ -84,14 +86,16 @@ For **Android Auto**, also enable developer settings and allow unknown sources f
 keytool -genkey -v -keystore vegassistent-release.keystore -alias vegassistent -keyalg RSA -keysize 2048 -validity 10000
 ```
 
-3. Build and upload to GitHub Releases:
+3. Place `vegdata.db` (~1.0 GB) and `roadgraph.db` (~370 MB) in `app/src/main/assets/` (both gitignored). Without them the APK has no map data.
+
+4. Build and upload to GitHub Releases (GitHub allows up to 2 GB per asset):
 
 ```bash
 ./gradlew :app:assembleRelease
-gh release create v1.0.0 app/build/outputs/apk/release/app-release.apk --title "Vegassistent 1.0" --notes "First public release"
+gh release create v1.1.0 app/build/outputs/apk/release/app-release.apk --title "Vegassistent 1.1.0" --notes "See the release notes"
 ```
 
-Output: `app/build/outputs/apk/release/app-release.apk`
+Output: `app/build/outputs/apk/release/app-release.apk` (~1.4 GB). Bump `versionCode` and `versionName` in `app/build.gradle.kts` before each release.
 
 > **Important:** Back up `vegassistent-release.keystore` and `keystore.properties`. You need the same key for all future updates. These files are gitignored and never committed.
 
@@ -121,7 +125,7 @@ Alerts use the messaging/car notification path so they can show as heads-up whil
 app/                 Android app (Compose UI, tracking service, Auto)
 scripts/             NVDB CSV → SQLite import and sign SVG conversion
 importer/            GraphHopper OSM → offline road graph (`roadgraph.db`)
-app/src/main/assets/ vegdata.db (bundled offline database)
+app/src/main/assets/ vegdata.db + roadgraph.db (gitignored; bundled in the APK)
 ```
 
 ## Data import
@@ -150,7 +154,7 @@ This uses GraphHopper on the desktop to build `app/src/main/assets/roadgraph.db`
 
 The PBF and GraphHopper cache stay on disk (`scripts/csv/`, `scripts/graphhopper-cache/`) and are gitignored. Rebuild `roadgraph.db` after replacing the OSM extract. First import of all of Norway can take a long time and needs several GB of RAM.
 
-> **Note:** `vegdata.db` is large (~80 MB). GitHub accepts it but warns above the 50 MB soft recommendation; Git LFS is optional if you prefer.
+`vegdata.db` (~1.0 GB) and `roadgraph.db` (~370 MB) are **gitignored**. They are not in the repo; they are packed into the release APK (`noCompress` for `.db`). Clone the project and run the import scripts if you need to build locally.
 
 ## Privacy
 
