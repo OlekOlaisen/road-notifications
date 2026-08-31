@@ -1,69 +1,81 @@
 # Vegassistent
 
-Varsel om skilt og faremomenter mens du kjører, på telefonen og i **Android Auto**. Alt skjer på enheten — du trenger ikke nett underveis.
+Road-sign and hazard alerts while you drive, on the phone and in **Android Auto**. Everything runs on the device — no network is needed once the app is installed.
 
-Appen følger GPS mot et kart over norske vegobjekter (NVDB) og viser heads-up når noe ligger foran deg på vegen du kjører.
+The app matches GPS to a map of Norwegian road objects (NVDB) and shows a heads-up when something is ahead on the road you are on.
 
-## Skjermbilder
+## Screenshots
 
-Heads-up i Android Auto:
+Heads-up alerts in Android Auto:
 
-### Fartsgrense
+### Speed limit
 
-![Fartsgrense 50 i Android Auto](docs/screenshots/android-auto-fartsgrense-50.jpg)
+![Speed limit 50 on Android Auto](docs/screenshots/android-auto-fartsgrense-50.jpg)
 
-### Viltfare
+### Wildlife
 
-![Viltfare (elg) i Android Auto](docs/screenshots/android-auto-viltfare-elg.jpg)
+![Wildlife (moose) on Android Auto](docs/screenshots/android-auto-viltfare-elg.jpg)
 
-### Bomstasjon
+### Toll station
 
-![Bomstasjon i Android Auto](docs/screenshots/android-auto-bomstasjon.jpg)
+![Toll station on Android Auto](docs/screenshots/android-auto-bomstasjon.jpg)
 
-### Stopp
+### Stop sign
 
-![Stoppskilt i Android Auto](docs/screenshots/android-auto-stopp.jpg)
+![Stop sign on Android Auto](docs/screenshots/android-auto-stopp.jpg)
 
-## Hva appen varsler om
+## Features
 
-Du kan slå typer av og på under **Varsler**.
+- **Offline alerts** — nationwide signs and road map ship in the app; no internet while driving
+- **Android Auto heads-up** — alerts can appear over the map while you navigate
+- **Road matching** — alerts follow the road you are on, not nearby side streets. In tunnels and under bridges the app stays on the last known road instead of jumping with GPS
+- **Official sign artwork** — Norwegian traffic-sign icons in the notifications
 
-| Type | Eksempler |
+### Tabs
+
+- **Home** — start or stop tracking. Tracking also starts when you open the app.
+- **Alerts** — turn each alert type on or off. Choices are remembered.
+- **Test** — fire a real notification for any sign type (and a combined priority-road + speed-limit alert) without driving. If Android Auto is connected, the same alert shows in the car. Use this to check that phone and Auto notifications work.
+- **Log** — records GPS, road matching, and alerts while tracking is on. Share, copy, or clear the trip log after a drive.
+
+### Alert types
+
+| Type | Examples |
 | --- | --- |
-| Fartsgrense | 30–110 km/t |
-| Forkjørsvei | Start og slutt |
-| Fotoboks | Punkt og strekningsmåling |
-| Bom | Bomstasjon, med pris når det finnes |
-| Vilt | Elg, hjort, rein, rådyr |
-| Jernbane | Planovergang |
-| Ferje | Ferjekai |
-| Skilt | Stopp, krappe svinger, innsnevring, tunnel |
+| Speed limits | 30–110 km/h |
+| Priority road | Start and end of forkjørsvei |
+| Speed cameras | Point cameras and average-speed stretches |
+| Tolls | Toll stations, with price when available |
+| Wildlife | Moose, deer, reindeer, roe deer |
+| Rail crossings | Level crossing |
+| Ferry | Ferry quay |
+| Signs | Stop, sharp curves, road narrowing, tunnel |
+| Municipality | Entering a kommune |
 
-Varslene følger vegen du er på, ikke sidegater ved siden av. I tunneler og under bruer holder appen seg på siste kjente veg i stedet for å hoppe med GPS.
+## Download and install
 
-## Last ned og installer
+Download `app-release.apk` from the [latest release](https://github.com/OlekOlaisen/road-notifications/releases). The file is about **1.4 GB** because the nationwide map and signs are bundled.
 
-Last ned `app-release.apk` fra [siste utgivelse](https://github.com/OlekOlaisen/road-notifications/releases). Filen er ca. **1,4 GB** fordi kart og skilt for hele landet ligger i appen.
+1. Allow **Install unknown apps** for your browser or file manager.
+2. Open the APK and install.
+3. Grant **location** and **notification** permission.
 
-1. Tillat **Installere ukjente apper** for nettleseren eller filbehandleren.
-2. Åpne APK-filen og installer.
-3. Gi tillatelse til **posisjon** og **varsler**.
+The first launch copies map data onto the phone — keep several GB free. To update, install the new APK over the one you already have.
 
-Første oppstart kopierer kartdata til telefonen — ha flere GB ledig plass. Oppdateringer: installer den nye APK-en over den du har.
-
-Krever Android 8.0 eller nyere.
+Requires Android 8.0 or newer.
 
 ## Android Auto
 
-Appen er sideloadet, så Android Auto må tillate ukjente kilder:
+The app is sideloaded, so Android Auto must allow unknown sources:
 
-1. Åpne Android Auto-innstillingene på telefonen.
-2. Slå på utviklerinnstillinger (trykk gjentatte ganger på versjonsnummeret).
-3. Tillat ukjente kilder.
-4. Koble til bilen og gi posisjon- og varslingstilgang.
+1. Open Android Auto settings on the phone.
+2. Enable developer settings (tap the version number repeatedly).
+3. Allow unknown sources.
+4. Connect to the car and grant location and notification access.
+5. Optionally pin Vegassistent on the Android Auto launcher (Customize launcher).
 
-Varslene kan da vises som heads-up over kartet mens du navigerer.
+Alerts can then show as heads-up over the map while you navigate.
 
-## Personvern
+## Privacy
 
-Posisjon brukes bare på telefonen for å treffe skilt og veg. Appen trenger ikke konto, analyse eller sky for å varsle.
+Location is used only on the phone to match signs and roads. The app does not need an account, analytics, or the cloud to alert.
