@@ -107,7 +107,7 @@ Output: `app/build/outputs/apk/release/app-release.apk` (~1.4 GB). Bump `version
 
 Install the debug APK on a device or emulator. After replacing `vegdata.db`, reinstall the app or clear app data so the new asset is used.
 
-JDK **17** is required.
+JDK **17** is required. Release packaging of the databases needs a large Gradle heap (`org.gradle.jvmargs=-Xmx6144m` in `gradle.properties`).
 
 ## Android Auto (local install)
 
