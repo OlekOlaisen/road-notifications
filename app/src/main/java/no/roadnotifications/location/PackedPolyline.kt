@@ -72,31 +72,40 @@ object PackedPolyline {
         start: RoadLatLon,
         end: RoadLatLon,
     ): ClosestSegment? {
-        val segment = FloatArray(2)
-        android.location.Location.distanceBetween(
+        val segmentLengthMeters = GeoMath.distanceMeters(
             start.latitude,
             start.longitude,
             end.latitude,
             end.longitude,
-            segment,
         )
-        val segmentLengthMeters = segment[0]
-        val segmentHeadingDegrees = segment[1]
+        val segmentHeadingDegrees = GeoMath.bearingDegrees(
+            start.latitude,
+            start.longitude,
+            end.latitude,
+            end.longitude,
+        )
         if (segmentLengthMeters < 0.5f) {
             return null
         }
-        val fromStart = FloatArray(2)
-        android.location.Location.distanceBetween(
+        val fromStartMeters = GeoMath.distanceMeters(
             start.latitude,
             start.longitude,
             latitude,
             longitude,
-            fromStart,
+        )
+        val fromStartBearingDegrees = GeoMath.bearingDegrees(
+            start.latitude,
+            start.longitude,
+            latitude,
+            longitude,
         )
         val headingDeltaRadians = Math.toRadians(
-            LocationDistance.headingDeltaDegrees(segmentHeadingDegrees, fromStart[1]).toDouble(),
+            LocationDistance.headingDeltaDegrees(
+                segmentHeadingDegrees,
+                fromStartBearingDegrees,
+            ).toDouble(),
         )
-        val alongTrackMeters = fromStart[0] * kotlin.math.cos(headingDeltaRadians)
+        val alongTrackMeters = fromStartMeters * kotlin.math.cos(headingDeltaRadians)
         val fraction = (alongTrackMeters / segmentLengthMeters).toFloat().coerceIn(0f, 1f)
         val snappedLatitude = start.latitude + ((end.latitude - start.latitude) * fraction)
         val snappedLongitude = start.longitude + ((end.longitude - start.longitude) * fraction)

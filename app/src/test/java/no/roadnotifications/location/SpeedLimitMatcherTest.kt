@@ -50,12 +50,85 @@ class SpeedLimitMatcherTest {
     }
 
     @Test
+    fun rampHeadingDoesNotMatchHighwayTravel() {
+        val matches = SpeedLimitMatcher.matchesSegmentHeading(
+            travelHeadingDegrees = 0f,
+            segmentHeadingDegrees = 28f,
+            retning = null,
+        )
+        assertFalse(matches)
+    }
+
+    @Test
     fun pickCurrentIgnoresCloserSideStreetWhenAlreadyOnForty() {
         val forty = aligned(id = 40L, verdi = "40", distanceMeters = 6f, headingDeltaDegrees = 4f)
         val thirty = aligned(id = 30L, verdi = "30", distanceMeters = 2f, headingDeltaDegrees = 8f)
         val current = SpeedLimitMatcher.pickCurrent(
             aligned = listOf(forty, thirty),
             previousVerdi = "40",
+        )
+        assertEquals(40L, current?.vegObjekt?.id)
+    }
+
+    @Test
+    fun pickCurrentKeepsHighwayWhenRampIsCloserButWorseHeading() {
+        val highwayEighty = aligned(
+            id = 80L,
+            verdi = "80",
+            distanceMeters = 16f,
+            headingDeltaDegrees = 4f,
+        )
+        val rampFifty = aligned(
+            id = 50L,
+            verdi = "50",
+            distanceMeters = 10f,
+            headingDeltaDegrees = 20f,
+        )
+        val current = SpeedLimitMatcher.pickCurrent(
+            aligned = listOf(highwayEighty, rampFifty),
+            previousVerdi = "80",
+        )
+        assertEquals(80L, current?.vegObjekt?.id)
+    }
+
+    @Test
+    fun pickCurrentKeepsFiftyWhenParallelThirtyIsSlightlyCloser() {
+        val fifty = aligned(id = 50L, verdi = "50", distanceMeters = 12f, headingDeltaDegrees = 4f)
+        val thirty = aligned(id = 30L, verdi = "30", distanceMeters = 10f, headingDeltaDegrees = 6f)
+        val current = SpeedLimitMatcher.pickCurrent(
+            aligned = listOf(fifty, thirty),
+            previousVerdi = "50",
+        )
+        assertEquals(50L, current?.vegObjekt?.id)
+    }
+
+    @Test
+    fun pickCurrentKeepsFiftyWhenParallelThirtyIsMuchCloser() {
+        val fifty = aligned(id = 50L, verdi = "50", distanceMeters = 8f, headingDeltaDegrees = 4f)
+        val thirty = aligned(id = 30L, verdi = "30", distanceMeters = 1f, headingDeltaDegrees = 6f)
+        val current = SpeedLimitMatcher.pickCurrent(
+            aligned = listOf(fifty, thirty),
+            previousVerdi = "50",
+        )
+        assertEquals(50L, current?.vegObjekt?.id)
+    }
+
+    @Test
+    fun pickCurrentDoesNotAdoptDistantLimitWhenPreviousGone() {
+        val forty = aligned(id = 40L, verdi = "40", distanceMeters = 20f, headingDeltaDegrees = 8f)
+        val current = SpeedLimitMatcher.pickCurrent(
+            aligned = listOf(forty),
+            previousVerdi = "80",
+        )
+        assertNull(current)
+    }
+
+    @Test
+    fun pickCurrentAdoptsNewLimitWhenPreviousGoneAndClearlyOnRoad() {
+        val forty = aligned(id = 40L, verdi = "40", distanceMeters = 4f, headingDeltaDegrees = 5f)
+        val current = SpeedLimitMatcher.pickCurrent(
+            aligned = listOf(forty),
+            previousVerdi = "80",
         )
         assertEquals(40L, current?.vegObjekt?.id)
     }

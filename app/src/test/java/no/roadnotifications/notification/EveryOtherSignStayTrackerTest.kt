@@ -57,7 +57,7 @@ class EveryOtherSignStayTrackerTest {
     }
 
     @Test
-    fun leavingAfterGraceRequestsSluttAlert() {
+    fun leavingAfterGraceEndsStaySoANewRoadCanAlert() {
         val tracker = EveryOtherSignStayTracker()
         tracker.onTick(
             onPriorityRoad = true,
@@ -73,7 +73,7 @@ class EveryOtherSignStayTrackerTest {
             sluttInWindow = false,
             nowElapsedRealtimeMs = 1_000L,
         )
-        assertFalse(tracker.consumeLeaveAlert())
+        assertTrue(tracker.stayActive)
 
         tracker.onTick(
             onPriorityRoad = false,
@@ -81,12 +81,12 @@ class EveryOtherSignStayTrackerTest {
             sluttInWindow = false,
             nowElapsedRealtimeMs = EveryOtherSignStayTracker.GRACE_AFTER_LEAVE_MS,
         )
-        assertTrue(tracker.consumeLeaveAlert())
-        assertFalse(tracker.consumeLeaveAlert())
+        assertFalse(tracker.stayActive)
+        assertTrue(tracker.shouldAlertSign(201L))
     }
 
     @Test
-    fun returningWithinGraceDoesNotFireSlutt() {
+    fun returningWithinGraceDoesNotReAlert() {
         val tracker = EveryOtherSignStayTracker()
         tracker.onTick(
             onPriorityRoad = true,
@@ -107,12 +107,11 @@ class EveryOtherSignStayTrackerTest {
             sluttInWindow = false,
             nowElapsedRealtimeMs = 40_000L,
         )
-        assertFalse(tracker.consumeLeaveAlert())
         assertFalse(tracker.shouldAlertSign(102L))
     }
 
     @Test
-    fun sluttPlateEndsTheStayWithoutADelayedLeave() {
+    fun sluttPlateEndsTheStaySoANewRoadCanAlert() {
         val tracker = EveryOtherSignStayTracker()
         tracker.onTick(
             onPriorityRoad = true,
@@ -127,14 +126,7 @@ class EveryOtherSignStayTrackerTest {
             sluttInWindow = true,
             nowElapsedRealtimeMs = 2_000L,
         )
-        assertFalse(tracker.consumeLeaveAlert())
-        tracker.onTick(
-            onPriorityRoad = false,
-            prioritySignInWindow = false,
-            sluttInWindow = false,
-            nowElapsedRealtimeMs = EveryOtherSignStayTracker.GRACE_AFTER_LEAVE_MS + 2_000L,
-        )
-        assertFalse(tracker.consumeLeaveAlert())
+        assertFalse(tracker.stayActive)
         assertTrue(tracker.shouldAlertSign(201L))
     }
 
@@ -162,5 +154,25 @@ class EveryOtherSignStayTrackerTest {
             nowElapsedRealtimeMs = EveryOtherSignStayTracker.GRACE_AFTER_LEAVE_MS,
         )
         assertFalse(tracker.stayActive)
+    }
+
+    @Test
+    fun aSignInTheWindowKeepsStayWithoutBeingOnTheStretch() {
+        val tracker = EveryOtherSignStayTracker()
+        tracker.onTick(
+            onPriorityRoad = true,
+            prioritySignInWindow = false,
+            sluttInWindow = false,
+            nowElapsedRealtimeMs = 0L,
+        )
+        tracker.shouldAlertSign(101L)
+        tracker.onTick(
+            onPriorityRoad = false,
+            prioritySignInWindow = true,
+            sluttInWindow = false,
+            nowElapsedRealtimeMs = EveryOtherSignStayTracker.GRACE_AFTER_LEAVE_MS + 5_000L,
+        )
+        assertTrue(tracker.stayActive)
+        assertFalse(tracker.shouldAlertSign(102L))
     }
 }

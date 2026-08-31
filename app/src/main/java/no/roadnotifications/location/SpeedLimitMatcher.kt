@@ -17,8 +17,16 @@ data class AlignedSpeedLimit(
  * their nearest segment. Alert only when that on-road value changes.
  */
 object SpeedLimitMatcher {
-    const val MAX_SEGMENT_HEADING_DELTA_DEGREES = 35f
-    const val HYSTERESIS_METERS = 8f
+    const val MAX_SEGMENT_HEADING_DELTA_DEGREES = 22f
+    const val SWITCH_CLOSER_METERS = 15f
+    const val SWITCH_MAX_HEADING_DELTA_DEGREES = 12f
+    /**
+     * While the current limit polyline is still this close, a parallel
+     * zone with similar heading (side street, opposite verge) must not
+     * steal it. Same-road changes happen when the old zone has faded
+     * beyond this distance.
+     */
+    const val STICKY_METERS = 18f
 
     fun headingDeltaToSegment(
         travelHeadingDegrees: Float,
@@ -63,32 +71,33 @@ object SpeedLimitMatcher {
         if (aligned.isEmpty()) {
             return null
         }
-        val closest = aligned.minWith(
-            compareBy(
-                { candidate -> candidate.distanceMeters },
-                { candidate -> candidate.headingDeltaDegrees },
-            ),
-        )
+        val best = aligned.minWith(scoreComparator())
         val previousSpeed = previousVerdi?.trim().orEmpty()
         if (previousSpeed.isEmpty()) {
-            return closest
+            return best
         }
         val previousBest = aligned
             .filter { candidate ->
                 candidate.vegObjekt.verdi?.trim() == previousSpeed
             }
-            .minWithOrNull(
-                compareBy(
-                    { candidate -> candidate.distanceMeters },
-                    { candidate -> candidate.headingDeltaDegrees },
-                ),
-            ) ?: return closest
-        val stillOnPreviousRoad =
-            previousBest.distanceMeters <= closest.distanceMeters + HYSTERESIS_METERS
-        return if (stillOnPreviousRoad) {
-            previousBest
+            .minWithOrNull(scoreComparator())
+        if (previousBest == null) {
+            return if (isClearlyOnRoad(best)) best else null
+        }
+        if (!stillOnPreviousRoad(previousBest)) {
+            return if (isClearlyOnRoad(best)) best else null
+        }
+        if (previousBest.distanceMeters <= STICKY_METERS) {
+            return previousBest
+        }
+        val differentLimit = best.vegObjekt.verdi?.trim() != previousSpeed
+        val clearlyCloser = previousBest.distanceMeters - best.distanceMeters >=
+            SWITCH_CLOSER_METERS
+        val headingAgrees = best.headingDeltaDegrees <= SWITCH_MAX_HEADING_DELTA_DEGREES
+        return if (differentLimit && clearlyCloser && headingAgrees) {
+            best
         } else {
-            closest
+            previousBest
         }
     }
 
@@ -141,6 +150,22 @@ object SpeedLimitMatcher {
                 distanceMeters = closest.distanceMeters,
                 headingDeltaDegrees = headingDeltaDegrees,
             )
+        }
+    }
+
+    private fun stillOnPreviousRoad(previousBest: AlignedSpeedLimit): Boolean {
+        return previousBest.headingDeltaDegrees <= MAX_SEGMENT_HEADING_DELTA_DEGREES &&
+            previousBest.distanceMeters <= LocationDistance.STRETCH_ON_ROAD_METERS
+    }
+
+    private fun isClearlyOnRoad(candidate: AlignedSpeedLimit): Boolean {
+        return candidate.headingDeltaDegrees <= SWITCH_MAX_HEADING_DELTA_DEGREES &&
+            candidate.distanceMeters <= STICKY_METERS
+    }
+
+    private fun scoreComparator(): Comparator<AlignedSpeedLimit> {
+        return compareBy { candidate ->
+            candidate.headingDeltaDegrees * 2f + candidate.distanceMeters
         }
     }
 }

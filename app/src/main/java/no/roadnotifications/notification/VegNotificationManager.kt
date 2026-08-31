@@ -49,7 +49,6 @@ class VegNotificationManager(private val context: Context) {
         matchingObjektIds: Set<Long>,
         higherImportanceApproaching: Boolean = false,
     ): List<AlertCandidate> {
-        alertPassTracker.prepareTick(matchingObjektIds)
         val enabled = candidates.filter { candidate ->
             alertPreferences.isEnabled(
                 candidate.vegObjekt.type,
@@ -64,38 +63,27 @@ class VegNotificationManager(private val context: Context) {
                 },
             )
         }
-        val passingOncePerPass = enabled.filter { candidate ->
-            alertPassTracker.shouldNotify(candidate.vegObjekt.id)
-        }
-        val alreadyAlertedThisPass = enabled.filter { candidate ->
-            candidate !in passingOncePerPass
-        }
-        if (alreadyAlertedThisPass.isNotEmpty()) {
-            TripLog.append(
-                "SKIP already-alerted=" + alreadyAlertedThisPass.joinToString(",") { candidate ->
-                    TripLog.formatObjekt(candidate.vegObjekt)
-                },
-            )
-        }
-        val selected = AlertPriority.selectToNotify(
-            passingOncePerPass = passingOncePerPass,
+        val selection = AlertSelector.select(
+            passTracker = alertPassTracker,
+            enabledCandidates = enabled,
+            matchingObjektIds = matchingObjektIds,
             higherImportanceApproaching = higherImportanceApproaching,
         )
-        val heldForLater = passingOncePerPass.filter { candidate ->
-            candidate !in selected
-        }
-        if (heldForLater.isNotEmpty()) {
+        if (selection.alreadyAlertedThisPass.isNotEmpty()) {
             TripLog.append(
-                "SKIP lower-priority=" + heldForLater.joinToString(",") { candidate ->
+                "SKIP already-alerted=" + selection.alreadyAlertedThisPass.joinToString(",") { candidate ->
                     TripLog.formatObjekt(candidate.vegObjekt)
                 },
             )
         }
-        passingOncePerPass.forEach { candidate ->
-            if (candidate !in heldForLater) {
-                alertPassTracker.remember(candidate.vegObjekt.id)
-            }
+        if (selection.heldForLookahead.isNotEmpty()) {
+            TripLog.append(
+                "SKIP lower-priority=" + selection.heldForLookahead.joinToString(",") { candidate ->
+                    TripLog.formatObjekt(candidate.vegObjekt)
+                },
+            )
         }
+        val selected = selection.selected
         if (selected.isEmpty()) {
             return emptyList()
         }

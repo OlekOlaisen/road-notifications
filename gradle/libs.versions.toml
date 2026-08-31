@@ -9,6 +9,7 @@ fragment = "1.8.6"
 composeBom = "2025.01.01"
 room = "2.6.1"
 sqliteAndroid = "3.49.0"
+sqliteJdbc = "3.47.1.0"
 playServicesLocation = "21.3.0"
 coroutines = "1.10.1"
 carApp = "1.7.0"
@@ -36,6 +37,7 @@ kotlinx-coroutines-play-services = { group = "org.jetbrains.kotlinx", name = "ko
 androidx-car-app = { group = "androidx.car.app", name = "app", version.ref = "carApp" }
 
 junit = { group = "junit", name = "junit", version = "4.13.2" }
+xerial-sqlite-jdbc = { group = "org.xerial", name = "sqlite-jdbc", version.ref = "sqliteJdbc" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

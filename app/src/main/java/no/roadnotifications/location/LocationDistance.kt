@@ -93,6 +93,18 @@ object LocationDistance {
         return previous.distanceTo(current) >= MIN_MOVEMENT_METERS
     }
 
+    fun hasMovedEnough(previous: GpsFix?, current: GpsFix): Boolean {
+        if (previous == null) {
+            return true
+        }
+        return GeoMath.distanceMeters(
+            previous.latitude,
+            previous.longitude,
+            current.latitude,
+            current.longitude,
+        ) >= MIN_MOVEMENT_METERS
+    }
+
     fun boundingBoxAround(latitude: Double, longitude: Double, radiusMeters: Double): BoundingBox {
         val latitudeDelta = radiusMeters / METERS_PER_DEGREE_LATITUDE
         val longitudeScale = max(cos(Math.toRadians(latitude)), 0.01)
@@ -111,9 +123,12 @@ object LocationDistance {
         toLatitude: Double,
         toLongitude: Double,
     ): Float {
-        val results = FloatArray(1)
-        Location.distanceBetween(fromLatitude, fromLongitude, toLatitude, toLongitude, results)
-        return results[0]
+        return GeoMath.distanceMeters(
+            fromLatitude,
+            fromLongitude,
+            toLatitude,
+            toLongitude,
+        )
     }
 
     fun alertAlongTrackMeters(
@@ -174,18 +189,36 @@ object LocationDistance {
         val headingDegrees = travelHeadingOverrideDegrees
             ?: headingDegrees(currentLocation, previousLocation)
             ?: return null
-        val distanceAndBearing = FloatArray(2)
-        Location.distanceBetween(
-            currentLocation.latitude,
-            currentLocation.longitude,
+        return travelPathOffset(
+            currentLatitude = currentLocation.latitude,
+            currentLongitude = currentLocation.longitude,
+            targetLatitude = targetLatitude,
+            targetLongitude = targetLongitude,
+            travelHeadingDegrees = headingDegrees,
+        )
+    }
+
+    fun travelPathOffset(
+        currentLatitude: Double,
+        currentLongitude: Double,
+        targetLatitude: Double,
+        targetLongitude: Double,
+        travelHeadingDegrees: Float,
+    ): TravelPathOffset {
+        val distanceMeters = GeoMath.distanceMeters(
+            currentLatitude,
+            currentLongitude,
             targetLatitude,
             targetLongitude,
-            distanceAndBearing,
         )
-        val distanceMeters = distanceAndBearing[0]
-        val bearingToTargetDegrees = distanceAndBearing[1]
+        val bearingToTargetDegrees = GeoMath.bearingDegrees(
+            currentLatitude,
+            currentLongitude,
+            targetLatitude,
+            targetLongitude,
+        )
         val headingDeltaDegrees = abs(
-            signedHeadingDeltaDegrees(headingDegrees, bearingToTargetDegrees),
+            signedHeadingDeltaDegrees(travelHeadingDegrees, bearingToTargetDegrees),
         )
         val headingDeltaRadians = Math.toRadians(headingDeltaDegrees.toDouble())
         val alongTrackMeters = (distanceMeters * cos(headingDeltaRadians)).toFloat()
@@ -195,7 +228,7 @@ object LocationDistance {
             alongTrackMeters = alongTrackMeters,
             crossTrackMeters = crossTrackMeters,
             headingDeltaDegrees = headingDeltaDegrees,
-            travelHeadingDegrees = headingDegrees,
+            travelHeadingDegrees = travelHeadingDegrees,
         )
     }
 
@@ -241,6 +274,48 @@ object LocationDistance {
         return true
     }
 
+    fun travelPathSkipReason(
+        offset: TravelPathOffset,
+        objektType: String,
+        retning: String? = null,
+        vegRetningGrader: Float? = null,
+        speedMetersPerSecond: Float? = null,
+    ): String? {
+        val maxAlongTrackMeters = alertAlongTrackMeters(
+            objektType = objektType,
+            speedMetersPerSecond = speedMetersPerSecond,
+        )
+        if (offset.alongTrackMeters < MIN_ALONG_TRACK_METERS) {
+            return "for langt bak"
+        }
+        if (offset.alongTrackMeters > maxAlongTrackMeters) {
+            return "for langt foran"
+        }
+        if (offset.distanceMeters > maxAlongTrackMeters + 10f) {
+            return "for langt unna"
+        }
+        val maxCrossTrackMeters = effectiveMaxCrossTrackMeters(
+            objektType = objektType,
+            alongTrackMeters = offset.alongTrackMeters,
+        )
+        if (offset.crossTrackMeters > maxCrossTrackMeters) {
+            return "for langt til siden"
+        }
+        if (offset.headingDeltaDegrees > maxHeadingDeltaDegrees(objektType)) {
+            return "feil kurs"
+        }
+        if (!matchesLokRetning(
+                travelHeadingDegrees = offset.travelHeadingDegrees,
+                retning = retning,
+                vegRetningGrader = vegRetningGrader,
+                objektType = objektType,
+            )
+        ) {
+            return "feil lok.retning"
+        }
+        return null
+    }
+
     /**
      * [retning] MED/MOT is relative to road metrering. [vegRetningGrader] is the
      * compass bearing of the MED direction (from LINESTRING, or snapped onto a
@@ -277,8 +352,7 @@ object LocationDistance {
             objektType == VegObjektType.FORKJOERSVEI.name ||
             objektType == VegObjektType.SLUTT_FORKJOERSVEI.name ||
             objektType == VegObjektType.SLUTT_FART.name ||
-            objektType == VegObjektType.STREKNINGS_ATK.name ||
-            objektType == VegObjektType.VIKEPLIKT.name
+            objektType == VegObjektType.STREKNINGS_ATK.name
         ) {
             return absoluteMaxCrossTrackMeters
         }
@@ -301,7 +375,7 @@ object LocationDistance {
             VegObjektType.JERNBANE.name -> 30f
             VegObjektType.FERJEKAI.name -> 40f
             VegObjektType.STOPP.name -> 22f
-            VegObjektType.VIKEPLIKT.name -> 35f
+            VegObjektType.VIKEPLIKT.name -> 24f
             VegObjektType.FARLIG_SVING.name -> 22f
             VegObjektType.FARLIG_VEGKRYSS.name -> 20f
             VegObjektType.SMALERE_VEG.name -> 18f
@@ -323,7 +397,7 @@ object LocationDistance {
             VegObjektType.JERNBANE.name -> 25f
             VegObjektType.FERJEKAI.name -> 35f
             VegObjektType.STOPP.name -> 22f
-            VegObjektType.VIKEPLIKT.name -> 32f
+            VegObjektType.VIKEPLIKT.name -> 22f
             VegObjektType.FARLIG_SVING.name -> 20f
             VegObjektType.FARLIG_VEGKRYSS.name -> 20f
             VegObjektType.SMALERE_VEG.name -> 20f
@@ -352,6 +426,32 @@ object LocationDistance {
         return objektType == VegObjektType.BOM.name ||
             objektType == VegObjektType.JERNBANE.name ||
             objektType == VegObjektType.FERJEKAI.name
+    }
+
+    fun headingDegrees(current: GpsFix, previous: GpsFix?): Float? {
+        val currentSpeed = current.speedMetersPerSecond ?: 0f
+        if (current.headingDegrees != null &&
+            currentSpeed >= MIN_HEADING_SPEED_METERS_PER_SECOND
+        ) {
+            return current.headingDegrees
+        }
+        if (previous != null) {
+            val movedMeters = GeoMath.distanceMeters(
+                previous.latitude,
+                previous.longitude,
+                current.latitude,
+                current.longitude,
+            )
+            if (movedMeters >= MIN_HEADING_MOVEMENT_METERS) {
+                return GeoMath.bearingDegrees(
+                    previous.latitude,
+                    previous.longitude,
+                    current.latitude,
+                    current.longitude,
+                )
+            }
+        }
+        return current.headingDegrees
     }
 
     fun headingDegrees(currentLocation: Location, previousLocation: Location?): Float? {

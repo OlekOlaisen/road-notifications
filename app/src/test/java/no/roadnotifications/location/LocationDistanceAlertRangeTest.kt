@@ -55,15 +55,32 @@ class LocationDistanceAlertRangeTest {
     @Test
     fun yieldMatchesAShoulderPlateOnTheApproachRoad() {
         val offsetTowardGiveWayLine = TravelPathOffset(
+            distanceMeters = 42f,
+            alongTrackMeters = 40f,
+            crossTrackMeters = 10f,
+            headingDeltaDegrees = 12f,
+            travelHeadingDegrees = 335f,
+        )
+        assertTrue(
+            LocationDistance.matchesTravelPath(
+                offset = offsetTowardGiveWayLine,
+                objektType = VegObjektType.VIKEPLIKT.name,
+            ),
+        )
+    }
+
+    @Test
+    fun yieldDoesNotMatchASideStreetPlate() {
+        val offsetTowardSideStreet = TravelPathOffset(
             distanceMeters = 45f,
             alongTrackMeters = 40f,
             crossTrackMeters = 20f,
             headingDeltaDegrees = 25f,
             travelHeadingDegrees = 335f,
         )
-        assertTrue(
+        assertFalse(
             LocationDistance.matchesTravelPath(
-                offset = offsetTowardGiveWayLine,
+                offset = offsetTowardSideStreet,
                 objektType = VegObjektType.VIKEPLIKT.name,
             ),
         )

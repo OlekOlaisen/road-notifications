@@ -97,4 +97,6 @@ dependencies {
     implementation(libs.androidx.car.app)
 
     testImplementation(libs.junit)
+    testImplementation(libs.xerial.sqlite.jdbc)
+    testImplementation(libs.kotlinx.coroutines.android)
 }
