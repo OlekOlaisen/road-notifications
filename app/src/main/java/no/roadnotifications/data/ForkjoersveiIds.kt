@@ -1,7 +1,7 @@
 package no.roadnotifications.data
 
 /**
- * NVDB stretches (596, 775) reuse one vegobjekt-id across many linestrings.
+ * NVDB stretches reuse one vegobjekt-id across many linestrings.
  * Extra imported rows keep a unique SQLite primary key while
  * [nvdbId] recovers the original id for enter-once tracking.
  */
@@ -21,7 +21,12 @@ object ForkjoersveiIds {
     fun stretchGroupId(vegObjekt: VegObjektEntity): Long {
         return if (
             vegObjekt.type == VegObjektType.FORKJOERSVEI.name ||
-            vegObjekt.type == VegObjektType.STREKNINGS_ATK.name
+            vegObjekt.type == VegObjektType.STREKNINGS_ATK.name ||
+            vegObjekt.type == VegObjektType.FART.name ||
+            vegObjekt.type == VegObjektType.VILTFARE.name ||
+            vegObjekt.type == VegObjektType.BOM.name ||
+            vegObjekt.type == VegObjektType.JERNBANE.name ||
+            vegObjekt.type == VegObjektType.FERJEKAI.name
         ) {
             nvdbId(vegObjekt.id)
         } else {

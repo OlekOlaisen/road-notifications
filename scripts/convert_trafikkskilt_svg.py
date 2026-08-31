@@ -145,6 +145,9 @@ def resolve_sources() -> dict[str, Path]:
         sources[f"sign_146_{index}"] = find_svg(f"146_{index}", f"146_{index}.svg")
     for speed in (30, 40, 50, 60, 70, 80, 90, 100, 110):
         sources[f"sign_362_{speed}"] = find_svg(f"362_{speed}", f"362_{speed}.svg")
+    for speed in (30, 40, 50, 60, 70):
+        sources[f"sign_364_{speed}"] = find_svg(f"364_{speed}", f"364_{speed}.svg")
+    sources["sign_368"] = find_svg("368_0", "368_0.svg")
 
     missing = [name for name, path in sources.items() if path is None]
     if missing:

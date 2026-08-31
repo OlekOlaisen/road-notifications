@@ -26,6 +26,7 @@ import no.roadnotifications.data.VegDatabase
 import no.roadnotifications.data.VegObjektDao
 import no.roadnotifications.data.VegObjektEntity
 import no.roadnotifications.data.VegObjektType
+import no.roadnotifications.location.AlignedSpeedLimit
 import no.roadnotifications.location.BoundingBox
 import no.roadnotifications.location.KommuneMatcher
 import no.roadnotifications.location.LocationDistance
@@ -36,7 +37,9 @@ import no.roadnotifications.location.TravelPathOffset
 import no.roadnotifications.log.TripLog
 import no.roadnotifications.notification.AlertCandidate
 import no.roadnotifications.notification.AlertPriority
-import no.roadnotifications.notification.ForkjoersveiStayTracker
+import no.roadnotifications.notification.EveryOtherSignStayTracker
+import no.roadnotifications.notification.PriorityRoadGiveWay
+import no.roadnotifications.notification.StrekningsAtkTripTracker
 import no.roadnotifications.notification.VegNotificationManager
 import java.util.Locale
 
@@ -50,8 +53,8 @@ class VegTrackingService : LifecycleService() {
     private var lastOnRoadFartVerdi: String? = null
     private var lastKommuneId: Long? = null
     private var pendingKommuneAlert: VegObjektEntity? = null
-    private val forkjoersveiStayTracker = ForkjoersveiStayTracker()
-    private val strekningsAtkStayTracker = ForkjoersveiStayTracker()
+    private val forkjoersveiStayTracker = EveryOtherSignStayTracker()
+    private val strekningsAtkStayTracker = StrekningsAtkTripTracker()
 
     private val locationCallback = object : LocationCallback() {
         override fun onLocationResult(result: LocationResult) {
@@ -107,6 +110,7 @@ class VegTrackingService : LifecycleService() {
         fusedLocationClient.removeLocationUpdates(locationCallback)
         roadMatcher?.close()
         roadMatcher = null
+        vegNotificationManager.cancelQueuedAlerts()
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         TripLog.append("SERVICE stop")
         super.onDestroy()
@@ -212,10 +216,6 @@ class VegTrackingService : LifecycleService() {
             val onPriorityRoad = onStretch.any { vegObjekt ->
                 vegObjekt.type == VegObjektType.FORKJOERSVEI.name
             }
-            val wasOnPriorityRoad = onStretch.any { vegObjekt ->
-                vegObjekt.type == VegObjektType.FORKJOERSVEI.name &&
-                    ForkjoersveiIds.stretchGroupId(vegObjekt) in activeStretchIds
-            }
             val onStrekningsAtk = onStretch.any { vegObjekt ->
                 vegObjekt.type == VegObjektType.STREKNINGS_ATK.name
             }
@@ -239,20 +239,30 @@ class VegTrackingService : LifecycleService() {
                 currentVerdi = currentSpeedLimit?.vegObjekt?.verdi,
                 previousVerdi = lastOnRoadFartVerdi,
             )
-            val nearbyPathOffsets = nearby
+            val nearbyPathOffsets = (nearby + stretchObjects)
+                .distinctBy { vegObjekt -> vegObjekt.id }
                 .mapNotNull { vegObjekt ->
                     if (vegObjekt.type == VegObjektType.KOMMUNE.name) {
                         return@mapNotNull null
                     }
+                    val (targetLatitude, targetLongitude) = pathAlertTarget(
+                        vegObjekt = vegObjekt,
+                        queryLocation = queryLocation,
+                    )
                     val pathOffset = LocationDistance.travelPathOffset(
                         currentLocation = queryLocation,
                         previousLocation = previousLocation,
-                        targetLatitude = vegObjekt.lat,
-                        targetLongitude = vegObjekt.lon,
+                        targetLatitude = targetLatitude,
+                        targetLongitude = targetLongitude,
                         travelHeadingOverrideDegrees = travelHeadingDegrees,
                     ) ?: return@mapNotNull null
                     vegObjekt to pathOffset
                 }
+            val travelSpeedMetersPerSecond = if (location.hasSpeed()) {
+                location.speed
+            } else {
+                null
+            }
             val allPathMatches = nearbyPathOffsets
                 .mapNotNull { (vegObjekt, pathOffset) ->
                     if (vegObjekt.type == VegObjektType.FART.name && currentSpeedLimit != null) {
@@ -263,13 +273,80 @@ class VegTrackingService : LifecycleService() {
                             objektType = vegObjekt.type,
                             retning = vegObjekt.retning,
                             vegRetningGrader = vegObjekt.vegRetningGrader,
+                            speedMetersPerSecond = travelSpeedMetersPerSecond,
                         )
                     ) {
                         return@mapNotNull null
                     }
                     vegObjekt to pathOffset
                 }
+            val prioritySignInWindow = allPathMatches.any { (vegObjekt, _) ->
+                vegObjekt.type == VegObjektType.FORKJOERSVEI.name
+            }
+            val sluttInWindow = allPathMatches.any { (vegObjekt, _) ->
+                vegObjekt.type == VegObjektType.SLUTT_FORKJOERSVEI.name
+            }
+            val strekningsAtkSignInWindow = allPathMatches.any { (vegObjekt, _) ->
+                vegObjekt.type == VegObjektType.STREKNINGS_ATK.name
+            }
+            val nowElapsedRealtimeMs = SystemClock.elapsedRealtime()
+            val closestSectionStretch = pickClosestStretch(
+                stretches = onStretch.filter { vegObjekt ->
+                    vegObjekt.type == VegObjektType.STREKNINGS_ATK.name &&
+                        vegObjekt.points != null
+                },
+                queryLocation = queryLocation,
+            )
+            val nearSectionExit = closestSectionStretch != null &&
+                isNearStretchExit(
+                    vegObjekt = closestSectionStretch,
+                    queryLocation = queryLocation,
+                    speedMetersPerSecond = travelSpeedMetersPerSecond,
+                )
+            forkjoersveiStayTracker.onTick(
+                onPriorityRoad = onPriorityRoad,
+                prioritySignInWindow = prioritySignInWindow,
+                sluttInWindow = sluttInWindow,
+                nowElapsedRealtimeMs = nowElapsedRealtimeMs,
+            )
+            strekningsAtkStayTracker.onTick(
+                onSection = onStrekningsAtk,
+                nearExit = nearSectionExit,
+                signInWindow = strekningsAtkSignInWindow,
+                latitude = queryLocation.latitude,
+                longitude = queryLocation.longitude,
+                nowElapsedRealtimeMs = nowElapsedRealtimeMs,
+            )
+            val suppressedGiveWay = allPathMatches.filter { (vegObjekt, _) ->
+                PriorityRoadGiveWay.shouldSuppress(
+                    objektType = vegObjekt.type,
+                    onPriorityRoad = onPriorityRoad,
+                    stayActive = forkjoersveiStayTracker.stayActive,
+                    travelHeadingDegrees = travelHeadingDegrees,
+                    retning = vegObjekt.retning,
+                    vegRetningGrader = vegObjekt.vegRetningGrader,
+                )
+            }
+            if (suppressedGiveWay.isNotEmpty()) {
+                TripLog.append(
+                    "SKIP on-priority-road=" + suppressedGiveWay.joinToString(",") { (vegObjekt, _) ->
+                        TripLog.formatObjekt(vegObjekt)
+                    },
+                )
+            }
             val higherImportanceApproaching = nearbyPathOffsets.any { (vegObjekt, pathOffset) ->
+                if (
+                    PriorityRoadGiveWay.shouldSuppress(
+                        objektType = vegObjekt.type,
+                        onPriorityRoad = onPriorityRoad,
+                        stayActive = forkjoersveiStayTracker.stayActive,
+                        travelHeadingDegrees = travelHeadingDegrees,
+                        retning = vegObjekt.retning,
+                        vegRetningGrader = vegObjekt.vegRetningGrader,
+                    )
+                ) {
+                    return@any false
+                }
                 AlertPriority.isLookaheadSuppressor(
                     objektType = vegObjekt.type,
                     offset = pathOffset,
@@ -277,66 +354,110 @@ class VegTrackingService : LifecycleService() {
                     vegRetningGrader = vegObjekt.vegRetningGrader,
                 )
             }
-            val prioritySignInWindow = allPathMatches.any { (vegObjekt, _) ->
-                vegObjekt.type == VegObjektType.FORKJOERSVEI.name
-            }
-            val strekningsAtkSignInWindow = allPathMatches.any { (vegObjekt, _) ->
-                vegObjekt.type == VegObjektType.STREKNINGS_ATK.name
-            }
-            val nowElapsedRealtimeMs = SystemClock.elapsedRealtime()
-            forkjoersveiStayTracker.onTick(
-                onPriorityRoad = onPriorityRoad,
-                prioritySignInWindow = prioritySignInWindow,
-                nowElapsedRealtimeMs = nowElapsedRealtimeMs,
+            val closestForkjoersveiSign = pickClosestMatch(
+                allPathMatches.filter { (vegObjekt, _) ->
+                    vegObjekt.type == VegObjektType.FORKJOERSVEI.name
+                },
             )
-            strekningsAtkStayTracker.onTick(
-                onPriorityRoad = onStrekningsAtk,
-                prioritySignInWindow = strekningsAtkSignInWindow,
-                nowElapsedRealtimeMs = nowElapsedRealtimeMs,
-            )
+            val forkjoersveiPathMatches = if (
+                closestForkjoersveiSign != null &&
+                forkjoersveiStayTracker.shouldAlertSign(closestForkjoersveiSign.first.id)
+            ) {
+                listOf(closestForkjoersveiSign)
+            } else {
+                emptyList()
+            }
+            val suppressedGiveWayIds = suppressedGiveWay.map { (vegObjekt, _) -> vegObjekt.id }.toSet()
             val pathMatches = allPathMatches.filter { (vegObjekt, _) ->
-                when (vegObjekt.type) {
-                    VegObjektType.FORKJOERSVEI.name ->
-                        !forkjoersveiStayTracker.suppressPathMatch(wasOnPriorityRoad)
-                    VegObjektType.STREKNINGS_ATK.name ->
+                when {
+                    vegObjekt.id in suppressedGiveWayIds -> false
+                    vegObjekt.type == VegObjektType.FORKJOERSVEI.name -> false
+                    vegObjekt.type == VegObjektType.VILTFARE.name -> vegObjekt.points == null
+                    vegObjekt.type == VegObjektType.STREKNINGS_ATK.name ->
                         !strekningsAtkStayTracker.suppressPathMatch(wasOnStrekningsAtk)
-                    VegObjektType.FOTOBOKS.name -> !onStrekningsAtk
+                    vegObjekt.type == VegObjektType.FOTOBOKS.name -> !onStrekningsAtk
                     else -> true
                 }
+            } + forkjoersveiPathMatches
+            val zeroPathOffset = TravelPathOffset(
+                distanceMeters = 0f,
+                alongTrackMeters = 0f,
+                crossTrackMeters = 0f,
+                headingDeltaDegrees = 0f,
+                travelHeadingDegrees = travelHeadingDegrees ?: 0f,
+            )
+            val forkjoersveiEnterMatches = if (closestForkjoersveiSign == null) {
+                val enteringPriority = enteringStretch.filter { vegObjekt ->
+                    vegObjekt.type == VegObjektType.FORKJOERSVEI.name
+                }
+                val closestEnter = pickClosestStretch(
+                    stretches = enteringPriority,
+                    queryLocation = queryLocation,
+                )
+                if (
+                    closestEnter != null &&
+                    forkjoersveiStayTracker.shouldAlertSign(
+                        ForkjoersveiIds.stretchGroupId(closestEnter),
+                    )
+                ) {
+                    listOf(closestEnter to zeroPathOffset)
+                } else {
+                    emptyList()
+                }
+            } else {
+                emptyList()
+            }
+            val enteringWildlife = enteringStretch.filter { vegObjekt ->
+                vegObjekt.type == VegObjektType.VILTFARE.name
+            }
+            val closestWildlife = pickClosestStretch(
+                stretches = enteringWildlife,
+                queryLocation = queryLocation,
+            )
+            val wildlifeEnterMatches = if (closestWildlife != null) {
+                listOf(closestWildlife to zeroPathOffset)
+            } else {
+                emptyList()
             }
             val stretchMatches = enteringStretch
-                .filter { vegObjekt -> vegObjekt.type != VegObjektType.FART.name }
+                .filter { vegObjekt ->
+                    vegObjekt.type != VegObjektType.FART.name &&
+                        vegObjekt.type != VegObjektType.FORKJOERSVEI.name &&
+                        vegObjekt.type != VegObjektType.VILTFARE.name
+                }
                 .filter { vegObjekt ->
                     when (vegObjekt.type) {
-                        VegObjektType.FORKJOERSVEI.name ->
-                            !forkjoersveiStayTracker.suppressEnter()
                         VegObjektType.STREKNINGS_ATK.name ->
                             !strekningsAtkStayTracker.suppressEnter()
                         else -> true
                     }
                 }
-                .map { vegObjekt ->
-                    vegObjekt to TravelPathOffset(
-                        distanceMeters = 0f,
-                        alongTrackMeters = 0f,
-                        crossTrackMeters = 0f,
-                        headingDeltaDegrees = 0f,
-                        travelHeadingDegrees = travelHeadingDegrees ?: 0f,
-                    )
-                }
-            val speedLimitMatch = if (speedLimitChanged && currentSpeedLimit != null) {
+                .map { vegObjekt -> vegObjekt to zeroPathOffset } +
+                forkjoersveiEnterMatches +
+                wildlifeEnterMatches
+            val speedLimitMatch = fartMatchesThisTick(
+                speedLimitChanged = speedLimitChanged,
+                currentSpeedLimit = currentSpeedLimit,
+                travelHeadingDegrees = travelHeadingDegrees,
+            )
+            val sluttFromLeave = if (
+                !sluttInWindow &&
+                forkjoersveiStayTracker.consumeLeaveAlert()
+            ) {
                 listOf(
-                    currentSpeedLimit.vegObjekt to TravelPathOffset(
-                        distanceMeters = currentSpeedLimit.distanceMeters,
-                        alongTrackMeters = 0f,
-                        crossTrackMeters = currentSpeedLimit.distanceMeters,
-                        headingDeltaDegrees = currentSpeedLimit.headingDeltaDegrees,
-                        travelHeadingDegrees = travelHeadingDegrees ?: 0f,
-                    ),
+                    syntheticSluttForkjoersvei(queryLocation) to zeroPathOffset,
                 )
             } else {
+                if (sluttInWindow) {
+                    forkjoersveiStayTracker.consumeLeaveAlert()
+                }
                 emptyList()
             }
+            val sluttFromAtk = strekningsAtkStayTracker.consumeEndAlert()?.let { kmh ->
+                listOf(
+                    syntheticSluttStrekningsAtk(queryLocation, kmh) to zeroPathOffset,
+                )
+            } ?: emptyList()
             val gpsAccuracyTooPoor = queryLocation.hasAccuracy() &&
                 queryLocation.accuracy > LocationDistance.MAX_GPS_ACCURACY_METERS
             val currentKommune = if (gpsAccuracyTooPoor) {
@@ -391,7 +512,10 @@ class VegTrackingService : LifecycleService() {
                     ),
                 )
             } ?: emptyList()
-            val closestByType = (pathMatches + stretchMatches + speedLimitMatch + kommuneMatch)
+            val closestByType = (
+                pathMatches + stretchMatches + speedLimitMatch + kommuneMatch +
+                    sluttFromLeave + sluttFromAtk
+            )
                 .groupBy { (vegObjekt, _) -> vegObjekt.type }
                 .map { (_, typedObjects) ->
                     typedObjects.minWith(
@@ -428,6 +552,8 @@ class VegTrackingService : LifecycleService() {
                 allPathMatches.map { (vegObjekt, _) -> vegObjekt.id } +
                     stretchMatches.map { (vegObjekt, _) -> vegObjekt.id } +
                     speedLimitMatch.map { (vegObjekt, _) -> vegObjekt.id } +
+                    sluttFromLeave.map { (vegObjekt, _) -> vegObjekt.id } +
+                    sluttFromAtk.map { (vegObjekt, _) -> vegObjekt.id } +
                     listOfNotNull(pendingKommuneAlert?.id)
                 ).toSet()
             val notified = vegNotificationManager.notifyIfNeeded(
@@ -442,13 +568,8 @@ class VegTrackingService : LifecycleService() {
                 pendingKommuneAlert = null
             }
             if (notified.any { candidate ->
-                    candidate.vegObjekt.type == VegObjektType.FORKJOERSVEI.name
-                }
-            ) {
-                forkjoersveiStayTracker.markAlerted()
-            }
-            if (notified.any { candidate ->
-                    candidate.vegObjekt.type == VegObjektType.STREKNINGS_ATK.name
+                    candidate.vegObjekt.type == VegObjektType.STREKNINGS_ATK.name &&
+                        candidate.vegObjekt.id != StrekningsAtkTripTracker.SYNTHETIC_SLUTT_ID
                 }
             ) {
                 strekningsAtkStayTracker.markAlerted()
@@ -581,25 +702,154 @@ class VegTrackingService : LifecycleService() {
         if (!LocationDistance.isStretchType(vegObjekt.type)) {
             return false
         }
-        if (travelHeadingDegrees != null &&
-            !LocationDistance.matchesLokRetning(
-                travelHeadingDegrees = travelHeadingDegrees,
-                retning = vegObjekt.retning,
-                vegRetningGrader = vegObjekt.vegRetningGrader,
-            )
-        ) {
-            return false
-        }
         val points = PackedPolyline.unpack(vegObjekt.points)
-        if (points.size < 2) {
-            return false
-        }
-        val distanceMeters = PackedPolyline.minDistanceMeters(
+        val closest = PackedPolyline.closestSegment(
             latitude = queryLocation.latitude,
             longitude = queryLocation.longitude,
             points = points,
+        ) ?: return false
+        if (closest.distanceMeters > LocationDistance.STRETCH_ON_ROAD_METERS) {
+            return false
+        }
+        return SpeedLimitMatcher.matchesSegmentHeading(
+            travelHeadingDegrees = travelHeadingDegrees,
+            segmentHeadingDegrees = closest.segmentHeadingDegrees,
+            retning = vegObjekt.retning,
         )
-        return distanceMeters <= LocationDistance.STRETCH_ON_ROAD_METERS
+    }
+
+    private fun fartMatchesThisTick(
+        speedLimitChanged: Boolean,
+        currentSpeedLimit: AlignedSpeedLimit?,
+        travelHeadingDegrees: Float?,
+    ): List<Pair<VegObjektEntity, TravelPathOffset>> {
+        val currentVerdi = currentSpeedLimit?.vegObjekt?.verdi?.trim().orEmpty()
+        if (currentSpeedLimit == null || currentVerdi.isEmpty() || !speedLimitChanged) {
+            return emptyList()
+        }
+        return listOf(
+            currentSpeedLimit.vegObjekt to TravelPathOffset(
+                distanceMeters = currentSpeedLimit.distanceMeters,
+                alongTrackMeters = 0f,
+                crossTrackMeters = currentSpeedLimit.distanceMeters,
+                headingDeltaDegrees = currentSpeedLimit.headingDeltaDegrees,
+                travelHeadingDegrees = travelHeadingDegrees ?: 0f,
+            ),
+        )
+    }
+
+    private fun pathAlertTarget(
+        vegObjekt: VegObjektEntity,
+        queryLocation: Location,
+    ): Pair<Double, Double> {
+        if (!LocationDistance.usesClosestPolylinePoint(vegObjekt.type)) {
+            return vegObjekt.lat to vegObjekt.lon
+        }
+        val closest = PackedPolyline.closestSegment(
+            latitude = queryLocation.latitude,
+            longitude = queryLocation.longitude,
+            points = PackedPolyline.unpack(vegObjekt.points),
+        ) ?: return vegObjekt.lat to vegObjekt.lon
+        return closest.latitude to closest.longitude
+    }
+
+    private fun pickClosestMatch(
+        matches: List<Pair<VegObjektEntity, TravelPathOffset>>,
+    ): Pair<VegObjektEntity, TravelPathOffset>? {
+        return matches.minWithOrNull(closestMatchComparator())
+    }
+
+    private fun pickClosestStretch(
+        stretches: List<VegObjektEntity>,
+        queryLocation: Location,
+    ): VegObjektEntity? {
+        return stretches.minWithOrNull(
+            compareBy { vegObjekt ->
+                val points = PackedPolyline.unpack(vegObjekt.points)
+                PackedPolyline.minDistanceMeters(
+                    latitude = queryLocation.latitude,
+                    longitude = queryLocation.longitude,
+                    points = points,
+                )
+            },
+        )
+    }
+
+    private fun closestMatchComparator(): Comparator<Pair<VegObjektEntity, TravelPathOffset>> {
+        return compareBy(
+            { (_, pathOffset) -> pathOffset.crossTrackMeters },
+            { (_, pathOffset) -> pathOffset.headingDeltaDegrees },
+            { (vegObjekt, _) ->
+                if (vegObjekt.retning.isNullOrBlank() || vegObjekt.vegRetningGrader == null) {
+                    1
+                } else {
+                    0
+                }
+            },
+            { (_, pathOffset) -> pathOffset.alongTrackMeters },
+        )
+    }
+
+    private fun syntheticSluttForkjoersvei(queryLocation: Location): VegObjektEntity {
+        return VegObjektEntity(
+            id = EveryOtherSignStayTracker.SYNTHETIC_SLUTT_ID,
+            type = VegObjektType.SLUTT_FORKJOERSVEI.name,
+            verdi = null,
+            lat = queryLocation.latitude,
+            lon = queryLocation.longitude,
+            minLat = queryLocation.latitude,
+            maxLat = queryLocation.latitude,
+            minLon = queryLocation.longitude,
+            maxLon = queryLocation.longitude,
+        )
+    }
+
+    private fun syntheticSluttStrekningsAtk(
+        queryLocation: Location,
+        averageSpeedKmh: Int,
+    ): VegObjektEntity {
+        return VegObjektEntity(
+            id = StrekningsAtkTripTracker.SYNTHETIC_SLUTT_ID,
+            type = VegObjektType.STREKNINGS_ATK.name,
+            verdi = StrekningsAtkTripTracker.SLUTT_VERDI_PREFIX + averageSpeedKmh,
+            lat = queryLocation.latitude,
+            lon = queryLocation.longitude,
+            minLat = queryLocation.latitude,
+            maxLat = queryLocation.latitude,
+            minLon = queryLocation.longitude,
+            maxLon = queryLocation.longitude,
+        )
+    }
+
+    private fun isNearStretchExit(
+        vegObjekt: VegObjektEntity,
+        queryLocation: Location,
+        speedMetersPerSecond: Float?,
+    ): Boolean {
+        val exit = stretchExitLatLon(vegObjekt) ?: return false
+        val distanceMeters = LocationDistance.distanceMeters(
+            queryLocation.latitude,
+            queryLocation.longitude,
+            exit.first,
+            exit.second,
+        )
+        return distanceMeters <= LocationDistance.alertAlongTrackMeters(
+            objektType = VegObjektType.STREKNINGS_ATK.name,
+            speedMetersPerSecond = speedMetersPerSecond,
+        )
+    }
+
+    private fun stretchExitLatLon(vegObjekt: VegObjektEntity): Pair<Double, Double>? {
+        val points = PackedPolyline.unpack(vegObjekt.points)
+        if (points.size < 2) {
+            return null
+        }
+        val exit = if ((vegObjekt.retning ?: "").equals("MOT", ignoreCase = true)) {
+            points.first()
+        } else {
+            points.last()
+        }
+        return exit.latitude to exit.longitude
     }
 
     companion object {

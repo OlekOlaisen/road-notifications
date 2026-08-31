@@ -25,6 +25,11 @@ object AlertCategories {
         speed("100"),
         speed("110"),
         category(
+            type = VegObjektType.SLUTT_FART.name,
+            label = "Slutt på fartsgrense",
+            signDrawableRes = R.drawable.sign_368,
+        ),
+        category(
             type = VegObjektType.FORKJOERSVEI.name,
             label = "Forkjørsvei",
             signDrawableRes = R.drawable.sign_206,
@@ -163,6 +168,29 @@ object AlertCategories {
         ),
     )
 
+    val testable: List<AlertCategory>
+        get() = toggleable.flatMap { category ->
+            if (category.type == VegObjektType.SLUTT_FART.name && category.verdi.isNullOrBlank()) {
+                sluttFartVariants
+            } else {
+                listOf(category)
+            }
+        }
+
+    private val sluttFartVariants: List<AlertCategory> = listOf(
+        sluttFart("30"),
+        sluttFart("40"),
+        sluttFart("50"),
+        sluttFart("60"),
+        sluttFart("70"),
+        category(
+            type = VegObjektType.SLUTT_FART.name,
+            verdi = "368",
+            label = "Slutt på fartsgrensesone",
+            signDrawableRes = R.drawable.sign_368,
+        ),
+    )
+
     private fun speed(speedLimit: String): AlertCategory {
         val drawableRes = when (speedLimit) {
             "30" -> R.drawable.sign_362_30
@@ -180,6 +208,23 @@ object AlertCategories {
             type = VegObjektType.FART.name,
             verdi = speedLimit,
             label = "Fartsgrense $speedLimit",
+            signDrawableRes = drawableRes,
+        )
+    }
+
+    private fun sluttFart(speedLimit: String): AlertCategory {
+        val drawableRes = when (speedLimit) {
+            "30" -> R.drawable.sign_364_30
+            "40" -> R.drawable.sign_364_40
+            "50" -> R.drawable.sign_364_50
+            "60" -> R.drawable.sign_364_60
+            "70" -> R.drawable.sign_364_70
+            else -> R.drawable.sign_368
+        }
+        return category(
+            type = VegObjektType.SLUTT_FART.name,
+            verdi = speedLimit,
+            label = "Slutt $speedLimit",
             signDrawableRes = drawableRes,
         )
     }

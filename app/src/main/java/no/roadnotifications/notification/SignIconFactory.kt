@@ -22,6 +22,7 @@ object SignIconFactory {
         }
         return when (vegObjekt.type) {
             VegObjektType.FART.name -> speedLimitBitmap(vegObjekt.verdi)
+            VegObjektType.SLUTT_FART.name -> endSpeedLimitBitmap(vegObjekt.verdi)
             VegObjektType.KOMMUNE.name -> placeNameBitmap(vegObjekt.verdi)
             else -> drawableBitmap(context, R.drawable.ic_sign_generic)
         }
@@ -44,6 +45,7 @@ object SignIconFactory {
             VegObjektType.FART.name -> speedLimitDrawableRes(verdi)
             VegObjektType.FORKJOERSVEI.name -> R.drawable.sign_206
             VegObjektType.SLUTT_FORKJOERSVEI.name -> R.drawable.sign_208
+            VegObjektType.SLUTT_FART.name -> endSpeedDrawableRes(verdi)
             VegObjektType.STOPP.name -> R.drawable.sign_204
             VegObjektType.VIKEPLIKT.name -> R.drawable.sign_202
             VegObjektType.FARLIG_SVING.name -> farligSvingDrawableRes(verdi)
@@ -72,6 +74,21 @@ object SignIconFactory {
             "90" -> R.drawable.sign_362_90
             "100" -> R.drawable.sign_362_100
             "110" -> R.drawable.sign_362_110
+            else -> 0
+        }
+    }
+
+    private fun endSpeedDrawableRes(verdi: String): Int {
+        if (verdi == "368") {
+            return R.drawable.sign_368
+        }
+        val speedText = verdi.takeWhile { character -> character.isDigit() }
+        return when (speedText) {
+            "30" -> R.drawable.sign_364_30
+            "40" -> R.drawable.sign_364_40
+            "50" -> R.drawable.sign_364_50
+            "60" -> R.drawable.sign_364_60
+            "70" -> R.drawable.sign_364_70
             else -> 0
         }
     }
@@ -181,6 +198,60 @@ object SignIconFactory {
         }
         val textY = centerY - (textPaint.descent() + textPaint.ascent()) / 2f
         canvas.drawText(speedText, centerX, textY, textPaint)
+        return bitmap
+    }
+
+    private fun endSpeedLimitBitmap(verdi: String?): Bitmap {
+        val speedText = verdi
+            ?.trim()
+            ?.takeWhile { character -> character.isDigit() }
+            ?.ifBlank { "?" }
+            ?: "?"
+        val bitmap = Bitmap.createBitmap(ICON_SIZE_PX, ICON_SIZE_PX, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        val centerX = ICON_SIZE_PX / 2f
+        val centerY = ICON_SIZE_PX / 2f
+        val radius = ICON_SIZE_PX / 2f - 4f
+
+        val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.BLACK
+            style = Paint.Style.FILL
+        }
+        canvas.drawCircle(centerX, centerY, radius, ringPaint)
+
+        val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            style = Paint.Style.FILL
+        }
+        canvas.drawCircle(centerX, centerY, radius * 0.82f, fillPaint)
+
+        val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.BLACK
+            typeface = Typeface.create(Typeface.DEFAULT_BOLD, Typeface.BOLD)
+            textAlign = Paint.Align.CENTER
+            textSize = when (speedText.length) {
+                1 -> radius * 0.95f
+                2 -> radius * 0.85f
+                else -> radius * 0.65f
+            }
+        }
+        val textY = centerY - (textPaint.descent() + textPaint.ascent()) / 2f
+        canvas.drawText(speedText, centerX, textY, textPaint)
+
+        val slashPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.parseColor("#C4C4C4")
+            style = Paint.Style.STROKE
+            strokeWidth = radius * 0.18f
+            strokeCap = Paint.Cap.BUTT
+        }
+        val slashInset = radius * 0.22f
+        canvas.drawLine(
+            centerX - radius + slashInset,
+            centerY + radius - slashInset,
+            centerX + radius - slashInset,
+            centerY - radius + slashInset,
+            slashPaint,
+        )
         return bitmap
     }
 

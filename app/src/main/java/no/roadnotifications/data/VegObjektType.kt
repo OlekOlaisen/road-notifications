@@ -14,6 +14,7 @@ enum class VegObjektType {
     SMALERE_VEG,
     TUNNEL,
     SLUTT_FORKJOERSVEI,
+    SLUTT_FART,
     VIKEPLIKT,
     FARLIG_VEGKRYSS,
     KOMMUNE,

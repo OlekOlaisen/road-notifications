@@ -28,8 +28,13 @@ class AlertPriorityTest {
         assertEquals(AlertImportance.MEDIUM, AlertPriority.importance(VegObjektType.FART.name))
         assertEquals(
             AlertImportance.MEDIUM,
+            AlertPriority.importance(VegObjektType.SLUTT_FART.name),
+        )
+        assertEquals(
+            AlertImportance.MEDIUM,
             AlertPriority.importance(VegObjektType.FORKJOERSVEI.name),
         )
+        assertEquals(AlertImportance.MEDIUM, AlertPriority.importance(VegObjektType.VILTFARE.name))
     }
 
     @Test
@@ -39,7 +44,6 @@ class AlertPriorityTest {
             VegObjektType.FARLIG_VEGKRYSS.name,
             VegObjektType.SMALERE_VEG.name,
             VegObjektType.TUNNEL.name,
-            VegObjektType.VILTFARE.name,
             VegObjektType.BOM.name,
             VegObjektType.FERJEKAI.name,
             VegObjektType.SLUTT_FORKJOERSVEI.name,
@@ -51,14 +55,9 @@ class AlertPriorityTest {
     }
 
     @Test
-    fun yieldKeepsSpeedChangeAndDropsDangerousJunction() {
+    fun yieldPlaysFirstThenSpeedThenJunction() {
         val selected = AlertPriority.selectToNotify(
             passingOncePerPass = listOf(
-                candidate(id = 1L, type = VegObjektType.FARLIG_VEGKRYSS.name),
-                candidate(id = 2L, type = VegObjektType.VIKEPLIKT.name),
-                candidate(id = 3L, type = VegObjektType.FART.name, verdi = "40"),
-            ),
-            candidatesInWindow = listOf(
                 candidate(id = 1L, type = VegObjektType.FARLIG_VEGKRYSS.name),
                 candidate(id = 2L, type = VegObjektType.VIKEPLIKT.name),
                 candidate(id = 3L, type = VegObjektType.FART.name, verdi = "40"),
@@ -66,24 +65,13 @@ class AlertPriorityTest {
             higherImportanceApproaching = false,
         )
         assertEquals(
-            listOf(VegObjektType.VIKEPLIKT.name, VegObjektType.FART.name),
+            listOf(
+                VegObjektType.VIKEPLIKT.name,
+                VegObjektType.FART.name,
+                VegObjektType.FARLIG_VEGKRYSS.name,
+            ),
             selected.map { candidate -> candidate.vegObjekt.type },
         )
-    }
-
-    @Test
-    fun alreadyAlertedYieldStillSuppressesANewCurveWarning() {
-        val selected = AlertPriority.selectToNotify(
-            passingOncePerPass = listOf(
-                candidate(id = 4L, type = VegObjektType.FARLIG_SVING.name),
-            ),
-            candidatesInWindow = listOf(
-                candidate(id = 2L, type = VegObjektType.VIKEPLIKT.name),
-                candidate(id = 4L, type = VegObjektType.FARLIG_SVING.name),
-            ),
-            higherImportanceApproaching = false,
-        )
-        assertTrue(selected.isEmpty())
     }
 
     @Test
@@ -91,21 +79,40 @@ class AlertPriorityTest {
         val curve = candidate(id = 4L, type = VegObjektType.FARLIG_SVING.name)
         val selected = AlertPriority.selectToNotify(
             passingOncePerPass = listOf(curve),
-            candidatesInWindow = listOf(curve),
             higherImportanceApproaching = false,
         )
         assertEquals(listOf(curve), selected)
     }
 
     @Test
-    fun yieldLookaheadSuppressesJunctionWarningBeforeThePlateWindow() {
+    fun yieldLookaheadStillHoldsJunctionUntilThePlateWindow() {
         val junction = candidate(id = 1L, type = VegObjektType.FARLIG_VEGKRYSS.name)
         val selected = AlertPriority.selectToNotify(
             passingOncePerPass = listOf(junction),
-            candidatesInWindow = listOf(junction),
             higherImportanceApproaching = true,
         )
         assertTrue(selected.isEmpty())
+    }
+
+    @Test
+    fun lookaheadDoesNotDropSpeedOrPriorityRoad() {
+        val selected = AlertPriority.selectToNotify(
+            passingOncePerPass = listOf(
+                candidate(id = 3L, type = VegObjektType.FART.name, verdi = "40"),
+                candidate(id = 5L, type = VegObjektType.FORKJOERSVEI.name),
+                candidate(id = 6L, type = VegObjektType.VILTFARE.name, verdi = "ELG"),
+                candidate(id = 1L, type = VegObjektType.FARLIG_SVING.name),
+            ),
+            higherImportanceApproaching = true,
+        )
+        assertEquals(
+            listOf(
+                VegObjektType.FORKJOERSVEI.name,
+                VegObjektType.FART.name,
+                VegObjektType.VILTFARE.name,
+            ),
+            selected.map { candidate -> candidate.vegObjekt.type },
+        )
     }
 
     @Test
@@ -162,6 +169,47 @@ class AlertPriorityTest {
         assertTrue(
             AlertPriority.iconPriority(VegObjektType.VIKEPLIKT.name) <
                 AlertPriority.iconPriority(VegObjektType.FARLIG_VEGKRYSS.name),
+        )
+        assertTrue(
+            AlertPriority.messageOrder(VegObjektType.FART.name) <
+                AlertPriority.messageOrder(VegObjektType.SLUTT_FART.name),
+        )
+    }
+
+    @Test
+    fun endSpeedLimitTitlesNameThePlate() {
+        assertEquals(
+            "Slutt 70",
+            VegNotificationManager.titleFor(
+                candidate(id = 1L, type = VegObjektType.SLUTT_FART.name, verdi = "70").vegObjekt,
+            ),
+        )
+        assertEquals(
+            "Slutt på fartsgrensesone",
+            VegNotificationManager.titleFor(
+                candidate(id = 2L, type = VegObjektType.SLUTT_FART.name, verdi = "368").vegObjekt,
+            ),
+        )
+        assertEquals(
+            "Strekningsmåling slutt",
+            VegNotificationManager.titleFor(
+                candidate(
+                    id = StrekningsAtkTripTracker.SYNTHETIC_SLUTT_ID,
+                    type = VegObjektType.STREKNINGS_ATK.name,
+                    verdi = "SLUTT:73",
+                ).vegObjekt,
+            ),
+        )
+        assertEquals(
+            "73 km/t",
+            VegNotificationManager.subtitleFor(
+                candidate(
+                    id = StrekningsAtkTripTracker.SYNTHETIC_SLUTT_ID,
+                    type = VegObjektType.STREKNINGS_ATK.name,
+                    verdi = "SLUTT:73",
+                ).vegObjekt,
+                alongTrackMeters = 0f,
+            ),
         )
     }
 

@@ -22,6 +22,13 @@ data class TravelPathOffset(
     val travelHeadingDegrees: Float,
 )
 
+private data class AlertWindowSpec(
+    val seconds: Float,
+    val minMeters: Float,
+    val maxMeters: Float,
+    val fallbackMeters: Float,
+)
+
 /**
  * Matching is "am I approaching this sign within its own alert distance?",
  * not "is anything within a shared radius?".
@@ -109,24 +116,51 @@ object LocationDistance {
         return results[0]
     }
 
-    fun alertAlongTrackMeters(objektType: String): Float {
+    fun alertAlongTrackMeters(
+        objektType: String,
+        speedMetersPerSecond: Float? = null,
+    ): Float {
+        val spec = alertWindowSpec(objektType)
+        if (speedMetersPerSecond == null || speedMetersPerSecond <= 0f) {
+            return spec.fallbackMeters
+        }
+        return (speedMetersPerSecond * spec.seconds).coerceIn(
+            spec.minMeters,
+            spec.maxMeters,
+        )
+    }
+
+    private fun alertWindowSpec(objektType: String): AlertWindowSpec {
         return when (objektType) {
-            VegObjektType.FART.name -> 90f
-            VegObjektType.FORKJOERSVEI.name -> AT_SIGN_ALONG_TRACK_METERS
-            VegObjektType.BOM.name -> AT_SIGN_ALONG_TRACK_METERS
-            VegObjektType.VILTFARE.name -> AT_SIGN_ALONG_TRACK_METERS
-            VegObjektType.FOTOBOKS.name -> 350f
-            VegObjektType.STREKNINGS_ATK.name -> AT_SIGN_ALONG_TRACK_METERS
-            VegObjektType.JERNBANE.name -> 200f
-            VegObjektType.FERJEKAI.name -> 150f
-            VegObjektType.STOPP.name -> 80f
-            VegObjektType.VIKEPLIKT.name -> YIELD_ALONG_TRACK_METERS
-            VegObjektType.FARLIG_SVING.name -> 80f
-            VegObjektType.FARLIG_VEGKRYSS.name -> 80f
-            VegObjektType.SMALERE_VEG.name -> 90f
-            VegObjektType.TUNNEL.name -> 160f
-            VegObjektType.SLUTT_FORKJOERSVEI.name -> AT_SIGN_ALONG_TRACK_METERS
-            else -> 70f
+            VegObjektType.FOTOBOKS.name ->
+                AlertWindowSpec(seconds = 12f, minMeters = 200f, maxMeters = 400f, fallbackMeters = 350f)
+            VegObjektType.STREKNINGS_ATK.name ->
+                AlertWindowSpec(seconds = 3f, minMeters = 20f, maxMeters = 60f, fallbackMeters = AT_SIGN_ALONG_TRACK_METERS)
+            VegObjektType.JERNBANE.name ->
+                AlertWindowSpec(seconds = 8f, minMeters = 80f, maxMeters = 250f, fallbackMeters = 200f)
+            VegObjektType.STOPP.name ->
+                AlertWindowSpec(seconds = 5f, minMeters = 30f, maxMeters = 70f, fallbackMeters = 80f)
+            VegObjektType.VIKEPLIKT.name,
+            VegObjektType.FORKJOERSVEI.name,
+            VegObjektType.SLUTT_FORKJOERSVEI.name,
+            VegObjektType.SLUTT_FART.name ->
+                AlertWindowSpec(seconds = 5f, minMeters = 30f, maxMeters = 70f, fallbackMeters = YIELD_ALONG_TRACK_METERS)
+            VegObjektType.FARLIG_SVING.name,
+            VegObjektType.FARLIG_VEGKRYSS.name ->
+                AlertWindowSpec(seconds = 6f, minMeters = 50f, maxMeters = 120f, fallbackMeters = 80f)
+            VegObjektType.SMALERE_VEG.name ->
+                AlertWindowSpec(seconds = 6f, minMeters = 50f, maxMeters = 120f, fallbackMeters = 90f)
+            VegObjektType.TUNNEL.name ->
+                AlertWindowSpec(seconds = 8f, minMeters = 80f, maxMeters = 200f, fallbackMeters = 160f)
+            VegObjektType.FERJEKAI.name ->
+                AlertWindowSpec(seconds = 8f, minMeters = 80f, maxMeters = 200f, fallbackMeters = 150f)
+            VegObjektType.BOM.name,
+            VegObjektType.VILTFARE.name ->
+                AlertWindowSpec(seconds = 2.5f, minMeters = 15f, maxMeters = 40f, fallbackMeters = AT_SIGN_ALONG_TRACK_METERS)
+            VegObjektType.FART.name ->
+                AlertWindowSpec(seconds = 6f, minMeters = 50f, maxMeters = 120f, fallbackMeters = 90f)
+            else ->
+                AlertWindowSpec(seconds = 5f, minMeters = 40f, maxMeters = 90f, fallbackMeters = 70f)
         }
     }
 
@@ -170,8 +204,12 @@ object LocationDistance {
         objektType: String,
         retning: String? = null,
         vegRetningGrader: Float? = null,
+        speedMetersPerSecond: Float? = null,
     ): Boolean {
-        val maxAlongTrackMeters = alertAlongTrackMeters(objektType)
+        val maxAlongTrackMeters = alertAlongTrackMeters(
+            objektType = objektType,
+            speedMetersPerSecond = speedMetersPerSecond,
+        )
         if (offset.alongTrackMeters < MIN_ALONG_TRACK_METERS) {
             return false
         }
@@ -191,23 +229,36 @@ object LocationDistance {
         if (offset.headingDeltaDegrees > maxHeadingDeltaDegrees(objektType)) {
             return false
         }
-        if (!matchesLokRetning(offset.travelHeadingDegrees, retning, vegRetningGrader)) {
+        if (!matchesLokRetning(
+                travelHeadingDegrees = offset.travelHeadingDegrees,
+                retning = retning,
+                vegRetningGrader = vegRetningGrader,
+                objektType = objektType,
+            )
+        ) {
             return false
         }
         return true
     }
 
     /**
-     * [retning] MED/MOT is relative to road metrering. [vegRetningGrader] is the compass
-     * bearing of the MED direction when known from LINESTRING geometry.
+     * [retning] MED/MOT is relative to road metrering. [vegRetningGrader] is the
+     * compass bearing of the MED direction (from LINESTRING, or snapped onto a
+     * nearby FART/FORKJOERSVEI segment at import).
+     *
+     * Applies to every NVDB object that has lok.retning: warning plates
+     * (100/102/106/122/124), give-way (202/204/208), ATK, bom, wildlife,
+     * railway, ferry, speed limits and priority-road stretches. Missing
+     * retning or heading means "both directions".
      */
     fun matchesLokRetning(
         travelHeadingDegrees: Float,
         retning: String?,
         vegRetningGrader: Float?,
+        objektType: String? = null,
     ): Boolean {
         if (retning.isNullOrBlank() || vegRetningGrader == null) {
-            return true
+            return objektType != VegObjektType.SLUTT_FART.name
         }
         val expectedHeadingDegrees = when (retning.trim().uppercase()) {
             "MED" -> vegRetningGrader
@@ -224,6 +275,8 @@ object LocationDistance {
         val absoluteMaxCrossTrackMeters = maxCrossTrackMeters(objektType)
         if (objektType == VegObjektType.FART.name ||
             objektType == VegObjektType.FORKJOERSVEI.name ||
+            objektType == VegObjektType.SLUTT_FORKJOERSVEI.name ||
+            objektType == VegObjektType.SLUTT_FART.name ||
             objektType == VegObjektType.STREKNINGS_ATK.name ||
             objektType == VegObjektType.VIKEPLIKT.name
         ) {
@@ -249,11 +302,12 @@ object LocationDistance {
             VegObjektType.FERJEKAI.name -> 40f
             VegObjektType.STOPP.name -> 22f
             VegObjektType.VIKEPLIKT.name -> 35f
-            VegObjektType.FARLIG_SVING.name -> 28f
-            VegObjektType.FARLIG_VEGKRYSS.name -> 26f
-            VegObjektType.SMALERE_VEG.name -> 22f
+            VegObjektType.FARLIG_SVING.name -> 22f
+            VegObjektType.FARLIG_VEGKRYSS.name -> 20f
+            VegObjektType.SMALERE_VEG.name -> 18f
             VegObjektType.TUNNEL.name -> 35f
-            VegObjektType.SLUTT_FORKJOERSVEI.name -> 16f
+            VegObjektType.SLUTT_FORKJOERSVEI.name -> 35f
+            VegObjektType.SLUTT_FART.name -> 35f
             else -> 20f
         }
     }
@@ -270,11 +324,12 @@ object LocationDistance {
             VegObjektType.FERJEKAI.name -> 35f
             VegObjektType.STOPP.name -> 22f
             VegObjektType.VIKEPLIKT.name -> 32f
-            VegObjektType.FARLIG_SVING.name -> 25f
-            VegObjektType.FARLIG_VEGKRYSS.name -> 24f
-            VegObjektType.SMALERE_VEG.name -> 22f
+            VegObjektType.FARLIG_SVING.name -> 20f
+            VegObjektType.FARLIG_VEGKRYSS.name -> 20f
+            VegObjektType.SMALERE_VEG.name -> 20f
             VegObjektType.TUNNEL.name -> 30f
-            VegObjektType.SLUTT_FORKJOERSVEI.name -> 20f
+            VegObjektType.SLUTT_FORKJOERSVEI.name -> 32f
+            VegObjektType.SLUTT_FART.name -> 32f
             else -> 20f
         }
     }
@@ -286,7 +341,17 @@ object LocationDistance {
     fun isStretchType(objektType: String): Boolean {
         return objektType == VegObjektType.FART.name ||
             objektType == VegObjektType.FORKJOERSVEI.name ||
-            objektType == VegObjektType.STREKNINGS_ATK.name
+            objektType == VegObjektType.STREKNINGS_ATK.name ||
+            objektType == VegObjektType.VILTFARE.name ||
+            objektType == VegObjektType.BOM.name ||
+            objektType == VegObjektType.JERNBANE.name ||
+            objektType == VegObjektType.FERJEKAI.name
+    }
+
+    fun usesClosestPolylinePoint(objektType: String): Boolean {
+        return objektType == VegObjektType.BOM.name ||
+            objektType == VegObjektType.JERNBANE.name ||
+            objektType == VegObjektType.FERJEKAI.name
     }
 
     fun headingDegrees(currentLocation: Location, previousLocation: Location?): Float? {

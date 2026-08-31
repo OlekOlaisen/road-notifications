@@ -6,6 +6,8 @@ import java.nio.ByteOrder
 data class ClosestSegment(
     val distanceMeters: Float,
     val segmentHeadingDegrees: Float,
+    val latitude: Double,
+    val longitude: Double,
 )
 
 object PackedPolyline {
@@ -106,6 +108,8 @@ object PackedPolyline {
                 snappedLongitude,
             ),
             segmentHeadingDegrees = segmentHeadingDegrees,
+            latitude = snappedLatitude,
+            longitude = snappedLongitude,
         )
     }
 }

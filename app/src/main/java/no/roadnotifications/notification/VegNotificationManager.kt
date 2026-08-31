@@ -8,6 +8,8 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.os.Handler
+import android.os.Looper
 import android.widget.RemoteViews
 import androidx.car.app.notification.CarAppExtender
 import androidx.car.app.notification.CarNotificationManager
@@ -37,6 +39,10 @@ class VegNotificationManager(private val context: Context) {
     private val carNotificationManager = CarNotificationManager.from(context)
     private val alertPreferences = AlertPreferences(context)
     private val alertPassTracker = AlertPassTracker()
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val pendingAlerts = ArrayDeque<AlertCandidate>()
+    private var playingQueuedAlerts = false
+    private val playNextRunnable = Runnable { playNextQueuedAlert() }
 
     fun notifyIfNeeded(
         candidates: List<AlertCandidate>,
@@ -73,43 +79,37 @@ class VegNotificationManager(private val context: Context) {
         }
         val selected = AlertPriority.selectToNotify(
             passingOncePerPass = passingOncePerPass,
-            candidatesInWindow = enabled,
             higherImportanceApproaching = higherImportanceApproaching,
         )
-        val suppressedByPriority = passingOncePerPass.filter { candidate ->
+        val heldForLater = passingOncePerPass.filter { candidate ->
             candidate !in selected
         }
-        if (suppressedByPriority.isNotEmpty()) {
+        if (heldForLater.isNotEmpty()) {
             TripLog.append(
-                "SKIP lower-priority=" + suppressedByPriority.joinToString(",") { candidate ->
+                "SKIP lower-priority=" + heldForLater.joinToString(",") { candidate ->
                     TripLog.formatObjekt(candidate.vegObjekt)
                 },
             )
         }
         passingOncePerPass.forEach { candidate ->
-            val suppressedKommune = candidate in suppressedByPriority &&
-                candidate.vegObjekt.type == VegObjektType.KOMMUNE.name
-            if (!suppressedKommune) {
+            if (candidate !in heldForLater) {
                 alertPassTracker.remember(candidate.vegObjekt.id)
             }
         }
-        val toNotify = selected.sortedBy { candidate ->
-            AlertPriority.messageOrder(candidate.vegObjekt.type)
-        }
-        if (toNotify.isEmpty()) {
+        if (selected.isEmpty()) {
             return emptyList()
         }
-        postAlert(toNotify)
+        enqueueAlerts(selected)
         TripLog.append(
-            "ALERT " + toNotify.joinToString(",") { candidate ->
+            "ALERT " + selected.joinToString(",") { candidate ->
                 TripLog.formatObjekt(candidate.vegObjekt)
             },
         )
-        return toNotify
+        return selected
     }
 
     fun postTestAlert(type: String, verdi: String?) {
-        postAlert(
+        enqueueAlerts(
             listOf(
                 AlertCandidate(
                     vegObjekt = testObjekt(type = type, verdi = verdi, id = TEST_ALERT_BASE_ID),
@@ -120,7 +120,7 @@ class VegNotificationManager(private val context: Context) {
     }
 
     fun postTestCombinedAlert() {
-        postAlert(
+        enqueueAlerts(
             listOf(
                 AlertCandidate(
                     vegObjekt = testObjekt(
@@ -142,19 +142,49 @@ class VegNotificationManager(private val context: Context) {
         )
     }
 
-    private fun postAlert(toNotify: List<AlertCandidate>) {
-        val orderedAlerts = toNotify.sortedBy { candidate ->
+    fun cancelQueuedAlerts() {
+        mainHandler.removeCallbacks(playNextRunnable)
+        mainHandler.post {
+            pendingAlerts.clear()
+            playingQueuedAlerts = false
+        }
+    }
+
+    private fun enqueueAlerts(alerts: List<AlertCandidate>) {
+        val ordered = alerts.sortedBy { candidate ->
             AlertPriority.messageOrder(candidate.vegObjekt.type)
         }
-        val (titleText, subtitleText) = titleAndSubtitleFor(orderedAlerts)
-        val primaryObjekt = orderedAlerts
-            .minBy { candidate -> AlertPriority.iconPriority(candidate.vegObjekt.type) }
-            .vegObjekt
-        val isWildlife = orderedAlerts.any { candidate ->
-            candidate.vegObjekt.type == VegObjektType.VILTFARE.name
+        mainHandler.post {
+            val merged = AlertQueuePolicy.merge(
+                queued = pendingAlerts.toList(),
+                incoming = ordered,
+            )
+            pendingAlerts.clear()
+            pendingAlerts.addAll(merged)
+            if (!playingQueuedAlerts) {
+                playingQueuedAlerts = true
+                playNextQueuedAlert()
+            }
         }
+    }
+
+    private fun playNextQueuedAlert() {
+        val next = pendingAlerts.removeFirstOrNull()
+        if (next == null) {
+            playingQueuedAlerts = false
+            return
+        }
+        postAlert(next)
+        mainHandler.removeCallbacks(playNextRunnable)
+        mainHandler.postDelayed(playNextRunnable, NEXT_ALERT_DELAY_MS)
+    }
+
+    private fun postAlert(alert: AlertCandidate) {
+        val titleText = titleFor(alert.vegObjekt)
+        val subtitleText = subtitleFor(alert.vegObjekt, alert.alongTrackMeters)
+        val isWildlife = alert.vegObjekt.type == VegObjektType.VILTFARE.name
         val channelId = if (isWildlife) CHANNEL_WILDLIFE else CHANNEL_ALERTS
-        val signBitmap = SignIconFactory.largeIconBitmap(context, primaryObjekt)
+        val signBitmap = SignIconFactory.largeIconBitmap(context, alert.vegObjekt)
         val customView = alertRemoteViews(titleText, subtitleText, signBitmap)
         val notificationBuilder = NotificationCompat.Builder(context, channelId)
             .setSmallIcon(R.drawable.ic_notification)
@@ -181,40 +211,6 @@ class VegNotificationManager(private val context: Context) {
             "$titleText — $subtitleText"
         }
         VegCarAlertStore.recordAlert(logText)
-    }
-
-    private fun titleAndSubtitleFor(orderedAlerts: List<AlertCandidate>): Pair<String, String> {
-        val forkjoersveiAlert = orderedAlerts.find { candidate ->
-            candidate.vegObjekt.type == VegObjektType.FORKJOERSVEI.name
-        }
-        val fartAlert = orderedAlerts.find { candidate ->
-            candidate.vegObjekt.type == VegObjektType.FART.name
-        }
-        val hasHighImportance = orderedAlerts.any { candidate ->
-            AlertPriority.importance(candidate.vegObjekt.type) == AlertImportance.HIGH
-        }
-        if (forkjoersveiAlert != null && fartAlert != null && !hasHighImportance) {
-            val remainingAlerts = orderedAlerts.filter { candidate ->
-                candidate.vegObjekt.type != VegObjektType.FORKJOERSVEI.name &&
-                    candidate.vegObjekt.type != VegObjektType.FART.name
-            }
-            val subtitleParts = mutableListOf(titleFor(fartAlert.vegObjekt))
-            remainingAlerts.forEach { candidate ->
-                val part = subtitleFor(candidate.vegObjekt, candidate.alongTrackMeters)
-                if (part.isNotBlank()) {
-                    subtitleParts += part
-                }
-            }
-            return titleFor(forkjoersveiAlert.vegObjekt) to subtitleParts.joinToString(" · ")
-        }
-        val titleText = orderedAlerts.joinToString(" - ") { candidate ->
-            titleFor(candidate.vegObjekt)
-        }
-        val subtitleText = orderedAlerts
-            .map { candidate -> subtitleFor(candidate.vegObjekt, candidate.alongTrackMeters) }
-            .filter { part -> part.isNotBlank() }
-            .joinToString(" · ")
-        return titleText to subtitleText
     }
 
     private fun testObjekt(type: String, verdi: String?, id: Long): VegObjektEntity {
@@ -371,6 +367,7 @@ class VegNotificationManager(private val context: Context) {
         const val TRACKING_NOTIFICATION_ID = 1
         const val ALERT_NOTIFICATION_ID = 2
         val ALERT_NOTIFICATION_IDS = listOf(2, 3, 4, 5, 6)
+        private const val NEXT_ALERT_DELAY_MS = 3_000L
         private const val TEST_ALERT_BASE_ID = -1000L
         private const val SKYTTELPASS_RABATT = 0.20
 
@@ -384,7 +381,7 @@ class VegNotificationManager(private val context: Context) {
                 VegObjektType.FART.name ->
                     if (verdi.isBlank()) "Fartsgrense" else "Fartsgrense $verdi"
                 VegObjektType.FOTOBOKS.name -> "Fotoboks"
-                VegObjektType.STREKNINGS_ATK.name -> "Strekningsmåling"
+                VegObjektType.STREKNINGS_ATK.name -> strekningsAtkTitle(verdi)
                 VegObjektType.BOM.name -> "Bomstasjon"
                 VegObjektType.FORKJOERSVEI.name -> "Forkjørsvei"
                 VegObjektType.VILTFARE.name -> wildlifeTitle(verdi)
@@ -397,6 +394,7 @@ class VegNotificationManager(private val context: Context) {
                 VegObjektType.SMALERE_VEG.name -> smalereVegTitle(verdi)
                 VegObjektType.TUNNEL.name -> "Tunnel"
                 VegObjektType.SLUTT_FORKJOERSVEI.name -> "Slutt på forkjørsvei"
+                VegObjektType.SLUTT_FART.name -> sluttFartTitle(verdi)
                 VegObjektType.KOMMUNE.name ->
                     if (verdi.isBlank()) "Ny kommune" else verdi
                 else -> "Vegobjekt i nærheten"
@@ -408,8 +406,7 @@ class VegNotificationManager(private val context: Context) {
             return when (vegObjekt.type) {
                 VegObjektType.FOTOBOKS.name ->
                     distanceSubtitle(alongTrackMeters) ?: "Fotoboks foran"
-                VegObjektType.STREKNINGS_ATK.name ->
-                    if (verdi.isBlank()) "Gjennomsnittsfart foran" else verdi
+                VegObjektType.STREKNINGS_ATK.name -> strekningsAtkSubtitle(verdi)
                 VegObjektType.BOM.name -> bomSubtitle(verdi)
                 VegObjektType.FART.name -> ""
                 VegObjektType.FORKJOERSVEI.name -> "Forkjørsvei foran"
@@ -425,9 +422,26 @@ class VegNotificationManager(private val context: Context) {
                 VegObjektType.SMALERE_VEG.name -> "Vegen smalner"
                 VegObjektType.TUNNEL.name -> "Tunnel foran"
                 VegObjektType.SLUTT_FORKJOERSVEI.name -> "Forkjørsvei opphører"
+                VegObjektType.SLUTT_FART.name -> "Fartsgrense opphører"
                 VegObjektType.KOMMUNE.name -> "Ny kommune"
                 else -> "Objekt foran"
             }
+        }
+
+        private fun strekningsAtkTitle(verdi: String): String {
+            return if (verdi.startsWith(StrekningsAtkTripTracker.SLUTT_VERDI_PREFIX)) {
+                "Strekningsmåling slutt"
+            } else {
+                "Strekningsmåling"
+            }
+        }
+
+        private fun strekningsAtkSubtitle(verdi: String): String {
+            if (verdi.startsWith(StrekningsAtkTripTracker.SLUTT_VERDI_PREFIX)) {
+                val kmh = verdi.removePrefix(StrekningsAtkTripTracker.SLUTT_VERDI_PREFIX)
+                return "$kmh km/t"
+            }
+            return if (verdi.isBlank()) "Gjennomsnittsfart foran" else verdi
         }
 
         private fun farligSvingTitle(verdi: String): String {
@@ -437,6 +451,18 @@ class VegNotificationManager(private val context: Context) {
                 "102.1" -> "Farlige svinger — høyre"
                 "102.2" -> "Farlige svinger — venstre"
                 else -> "Farlig sving"
+            }
+        }
+
+        private fun sluttFartTitle(verdi: String): String {
+            if (verdi == "368") {
+                return "Slutt på fartsgrensesone"
+            }
+            val speedText = verdi.takeWhile { character -> character.isDigit() }
+            return if (speedText.isBlank()) {
+                "Slutt på fartsgrense"
+            } else {
+                "Slutt $speedText"
             }
         }
 
@@ -513,6 +539,7 @@ class VegNotificationManager(private val context: Context) {
                 VegObjektType.VILTFARE.name -> LocationDistance.AT_SIGN_ALONG_TRACK_METERS
                 VegObjektType.FORKJOERSVEI.name -> LocationDistance.AT_SIGN_ALONG_TRACK_METERS
                 VegObjektType.SLUTT_FORKJOERSVEI.name -> LocationDistance.AT_SIGN_ALONG_TRACK_METERS
+                VegObjektType.SLUTT_FART.name -> LocationDistance.YIELD_ALONG_TRACK_METERS
                 else -> null
             }
         }

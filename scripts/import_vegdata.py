@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """Import NVDB/Vegkart CSV files into app/src/main/assets/vegdata.db.
 
 NVDB exports typically use EUREF89 UTM zone 33 (EPSG:25833) in GEO.GEOMETRI.
@@ -66,6 +66,7 @@ BOM_PRICE_COLUMNS = (
     "egs.takst liten bil",
 )
 RETNING_COLUMNS = ("lok.retning",)
+ANSIKTSSIDE_COLUMNS = ("ansiktsside", "rettet mot")
 FERJE_NAME_COLUMNS = ("egs.navn", "navn")
 KOMMUNE_NAME_COLUMNS = ("kommunenavn",)
 KOMMUNE_NUMBER_COLUMNS = ("kommunenummer",)
@@ -76,6 +77,8 @@ KOMMUNE_FLATE_COLUMNS = (
 )
 JERNBANE_TYPE_COLUMNS = ("egs.type",)
 ATK_CONTROL_TYPE_COLUMNS = ("type trafikkontroll", "typetrafikkontroll")
+FORELDER_COLUMNS = ("rel.forelder", "forelder")
+PARENT_775_RE = re.compile(r"775\s*:\s*(\d+)", re.IGNORECASE)
 FERJE_STATUS_COLUMNS = ("egs.driftsstatus", "driftsstatus")
 SKILTNUMMER_COLUMNS = ("egs.skiltnummer", "skiltnummer")
 
@@ -85,8 +88,13 @@ SKILT_TYPES = (
     "SMALERE_VEG",
     "TUNNEL",
     "SLUTT_FORKJOERSVEI",
+    "SLUTT_FART",
     "VIKEPLIKT",
     "FARLIG_VEGKRYSS",
+)
+
+SLUTT_FART_SPEED_RE = re.compile(
+    r"(?:^|[^0-9])(110|100|90|80|70|60|50|40|30|20)slutt",
 )
 
 csv.field_size_limit(min(sys.maxsize, 50_000_000))
@@ -126,6 +134,8 @@ def detect_type(filename: str) -> str | None:
         return "BOM"
     if "forkjor" in normalized:
         return "FORKJOERSVEI"
+    if "fartsgrenseslutt" in normalized or SLUTT_FART_SPEED_RE.search(normalized):
+        return "SLUTT_FART"
     if "fart" in normalized:
         return "FART"
     return None
@@ -142,6 +152,10 @@ def detect_skiltplate_type(normalized_filename: str) -> str | None:
         "slutt" in normalized_filename and "forkjor" in normalized_filename
     ):
         return "SLUTT_FORKJOERSVEI"
+    if "fartsgrenseslutt" in normalized_filename or SLUTT_FART_SPEED_RE.search(
+        normalized_filename,
+    ):
+        return "SLUTT_FART"
     if any(
         token in normalized_filename
         for token in ("100.1", "100.2", "102.1", "102.2")
@@ -357,10 +371,95 @@ def veg_retning_from_projected_points(
     )
 
 
+METERS_PER_DEGREE_LATITUDE = 111_320.0
+POINT_RETNING_SNAP_METERS = 40.0
+RETNING_GRID_CELL_DEGREES = 0.002
+ROAD_ALIGNED_STRETCH_TYPES = ("FART", "FORKJOERSVEI", "STREKNINGS_ATK", "VILTFARE")
+CROSSING_STRETCH_TYPES = ("BOM", "JERNBANE", "FERJEKAI")
+STRETCH_TYPES = ROAD_ALIGNED_STRETCH_TYPES + CROSSING_STRETCH_TYPES
+POINT_RETNING_TYPES = (
+    "STOPP",
+    "VIKEPLIKT",
+    "FARLIG_SVING",
+    "FARLIG_VEGKRYSS",
+    "SMALERE_VEG",
+    "TUNNEL",
+    "SLUTT_FORKJOERSVEI",
+    "SLUTT_FART",
+    "FOTOBOKS",
+    "STREKNINGS_ATK",
+    "BOM",
+    "VILTFARE",
+    "JERNBANE",
+    "FERJEKAI",
+)
+
+
+def distance_meters(
+    from_latitude: float,
+    from_longitude: float,
+    to_latitude: float,
+    to_longitude: float,
+) -> float:
+    mean_latitude = math.radians((from_latitude + to_latitude) / 2.0)
+    northing = (to_latitude - from_latitude) * METERS_PER_DEGREE_LATITUDE
+    easting = (
+        (to_longitude - from_longitude)
+        * METERS_PER_DEGREE_LATITUDE
+        * math.cos(mean_latitude)
+    )
+    return math.hypot(easting, northing)
+
+
+def wgs_polyline_span_meters(points: list[tuple[float, float]]) -> float:
+    if len(points) < 2:
+        return 0.0
+    total = 0.0
+    for index in range(len(points) - 1):
+        total += distance_meters(
+            points[index][0],
+            points[index][1],
+            points[index + 1][0],
+            points[index + 1][1],
+        )
+    return total
+
+
+def geometry_dict_from_wgs(
+    points: list[tuple[float, float]],
+    veg_retning_grader: float | None,
+) -> dict[str, float | None]:
+    latitudes = [point[0] for point in points]
+    longitudes = [point[1] for point in points]
+    return {
+        "start_lat": latitudes[0],
+        "start_lon": longitudes[0],
+        "end_lat": latitudes[-1],
+        "end_lon": longitudes[-1],
+        "centroid_lat": sum(latitudes) / len(latitudes),
+        "centroid_lon": sum(longitudes) / len(longitudes),
+        "min_lat": min(latitudes),
+        "max_lat": max(latitudes),
+        "min_lon": min(longitudes),
+        "max_lon": max(longitudes),
+        "veg_retning_grader": veg_retning_grader,
+        "points": points,
+    }
+
+
 def geometry_from_row(
     row: dict[str, str],
     columns: list[str],
 ) -> dict[str, float | None] | None:
+    """Plate position from a POINT; compass heading from any LINESTRING.
+
+    NVDB skilt often have GEO.GEOMETRI as the plate (point) and sometimes
+    LOK.GEOMETRI as a short road line. Using only the point left
+    vegRetningGrader empty, so MED/MOT could not be applied.
+    """
+    wgs_polylines: list[list[tuple[float, float]]] = []
+    projected_polylines: list[list[tuple[float, float]]] = []
+
     lat_column = find_column(columns, LAT_COLUMNS)
     lon_column = find_column(columns, LON_COLUMNS)
     if lat_column and lon_column:
@@ -371,23 +470,12 @@ def geometry_from_row(
                 latitude = float(lat_text.replace(",", "."))
                 longitude = float(lon_text.replace(",", "."))
             except ValueError:
-                return None
-            if looks_like_utm(longitude, latitude):
-                latitude, longitude = utm33_to_wgs84(longitude, latitude)
-            return {
-                "start_lat": latitude,
-                "start_lon": longitude,
-                "end_lat": latitude,
-                "end_lon": longitude,
-                "centroid_lat": latitude,
-                "centroid_lon": longitude,
-                "min_lat": latitude,
-                "max_lat": latitude,
-                "min_lon": longitude,
-                "max_lon": longitude,
-                "veg_retning_grader": None,
-                "points": [(latitude, longitude)],
-            }
+                latitude = None
+                longitude = None
+            else:
+                if looks_like_utm(longitude, latitude):
+                    latitude, longitude = utm33_to_wgs84(longitude, latitude)
+                wgs_polylines.append([(latitude, longitude)])
 
     for wkt_name in WKT_COLUMNS:
         column = find_column(columns, (wkt_name,))
@@ -400,31 +488,53 @@ def geometry_from_row(
         )
         if not projected_points:
             continue
-        latitudes: list[float] = []
-        longitudes: list[float] = []
-        for x_value, y_value in projected_points:
-            if looks_like_utm(x_value, y_value):
-                latitude, longitude = utm33_to_wgs84(x_value, y_value)
-            else:
-                longitude, latitude = x_value, y_value
-            latitudes.append(latitude)
-            longitudes.append(longitude)
-        veg_retning = veg_retning_from_projected_points(projected_points)
-        return {
-            "start_lat": latitudes[0],
-            "start_lon": longitudes[0],
-            "end_lat": latitudes[-1],
-            "end_lon": longitudes[-1],
-            "centroid_lat": sum(latitudes) / len(latitudes),
-            "centroid_lon": sum(longitudes) / len(longitudes),
-            "min_lat": min(latitudes),
-            "max_lat": max(latitudes),
-            "min_lon": min(longitudes),
-            "max_lon": max(longitudes),
-            "veg_retning_grader": veg_retning,
-            "points": list(zip(latitudes, longitudes)),
-        }
-    return None
+        wgs_points = convert_projected_points(projected_points)
+        if not wgs_points:
+            continue
+        wgs_polylines.append(wgs_points)
+        projected_polylines.append(projected_points)
+
+    if not wgs_polylines:
+        return None
+
+    point_polylines = [points for points in wgs_polylines if len(points) == 1]
+    line_polylines = [points for points in wgs_polylines if len(points) >= 2]
+    if point_polylines:
+        position_points = point_polylines[0]
+    elif line_polylines:
+        position_points = max(line_polylines, key=wgs_polyline_span_meters)
+    else:
+        position_points = wgs_polylines[0]
+
+    veg_retning = None
+    if projected_polylines:
+        longest_projected = max(
+            projected_polylines,
+            key=lambda points: 0.0
+            if len(points) < 2
+            else math.hypot(
+                points[-1][0] - points[0][0],
+                points[-1][1] - points[0][1],
+            ),
+        )
+        veg_retning = veg_retning_from_projected_points(longest_projected)
+
+    stretch_points = position_points
+    if line_polylines:
+        stretch_points = max(line_polylines, key=wgs_polyline_span_meters)
+
+    geometry = geometry_dict_from_wgs(stretch_points, veg_retning)
+    geometry["start_lat"] = position_points[0][0]
+    geometry["start_lon"] = position_points[0][1]
+    geometry["end_lat"] = position_points[-1][0]
+    geometry["end_lon"] = position_points[-1][1]
+    geometry["centroid_lat"] = sum(point[0] for point in position_points) / len(
+        position_points,
+    )
+    geometry["centroid_lon"] = sum(point[1] for point in position_points) / len(
+        position_points,
+    )
+    return geometry
 
 
 def alert_coordinates(
@@ -436,7 +546,16 @@ def alert_coordinates(
     Forkjørsvei and fartsgrense stretches can be kilometers long. Alert at the
     entrance for the relevant travel direction instead of the geometric midpoint.
     """
-    if objekt_type in {"FORKJOERSVEI", "SLUTT_FORKJOERSVEI", "FART", "STREKNINGS_ATK"}:
+    if objekt_type in {
+        "FORKJOERSVEI",
+        "SLUTT_FORKJOERSVEI",
+        "FART",
+        "STREKNINGS_ATK",
+        "VILTFARE",
+        "BOM",
+        "JERNBANE",
+        "FERJEKAI",
+    }:
         if (retning or "").upper() == "MOT":
             return float(geometry["end_lat"]), float(geometry["end_lon"])
         return float(geometry["start_lat"]), float(geometry["start_lon"])
@@ -558,7 +677,7 @@ def pack_stretch_points(
     objekt_type: str,
     geometry: dict[str, float | None],
 ) -> bytes | None:
-    if objekt_type not in {"FART", "FORKJOERSVEI", "STREKNINGS_ATK"}:
+    if objekt_type not in STRETCH_TYPES:
         return None
     raw_points = geometry.get("points")
     if not isinstance(raw_points, list) or len(raw_points) < 2:
@@ -573,7 +692,64 @@ def pack_stretch_points(
     return packed
 
 
-def retning_from_row(row: dict[str, str], columns: list[str]) -> str | None:
+def parent_775_ids(row: dict[str, str], columns: list[str]) -> set[int]:
+    column = find_column(columns, FORELDER_COLUMNS)
+    if column is None:
+        return set()
+    raw = str(row.get(column, ""))
+    return {int(match.group(1)) for match in PARENT_775_RE.finditer(raw)}
+
+
+def is_section_control_camera(
+    row: dict[str, str],
+    columns: list[str],
+    streknings_atk_ids: set[int],
+) -> bool:
+    if not streknings_atk_ids:
+        return False
+    return bool(parent_775_ids(row, columns) & streknings_atk_ids)
+
+
+def nvdb_id_from_row_id(row_id: int) -> int:
+    if row_id & FORKJOERSVEI_EXTRA_ROW_FLAG == 0:
+        return row_id
+    nvdb_id_mask = (1 << FORKJOERSVEI_NVDB_ID_BITS) - 1
+    return (row_id >> FORKJOERSVEI_OCCURRENCE_BITS) & nvdb_id_mask
+
+
+def streknings_atk_nvdb_ids(connection: sqlite3.Connection) -> set[int]:
+    rows = connection.execute(
+        "SELECT id FROM vegobjekt WHERE type = 'STREKNINGS_ATK'",
+    ).fetchall()
+    return {nvdb_id_from_row_id(int(row[0])) for row in rows}
+
+
+def retning_from_ansiktsside(
+    row: dict[str, str],
+    columns: list[str],
+) -> str | None:
+    column = find_column(columns, ANSIKTSSIDE_COLUMNS)
+    if column is None:
+        return None
+    raw = normalize_key(str(row.get(column, "")))
+    if not raw:
+        return None
+    if "motmetrering" in raw:
+        return "MOT"
+    if "imetrering" in raw:
+        return "MED"
+    return None
+
+
+def retning_from_row(
+    row: dict[str, str],
+    columns: list[str],
+    objekt_type: str | None = None,
+) -> str | None:
+    if objekt_type == "SLUTT_FART":
+        face = retning_from_ansiktsside(row, columns)
+        if face is not None:
+            return face
     column = find_column(columns, RETNING_COLUMNS)
     if column is None:
         return None
@@ -695,6 +871,14 @@ def value_for_type(
             raw = str(row.get(column, "")).strip()
             return raw or None
         return None
+    if objekt_type == "SLUTT_FART":
+        column = find_column(columns, SKILTNUMMER_COLUMNS)
+        if column:
+            raw = str(row.get(column, "")).strip()
+            parsed = slutt_fart_verdi_from_code(skiltnummer_code(raw))
+            if parsed:
+                return parsed
+        return slutt_fart_verdi_from_filename(filename)
     if objekt_type in SKILT_TYPES:
         column = find_column(columns, SKILTNUMMER_COLUMNS)
         if column:
@@ -703,6 +887,28 @@ def value_for_type(
             if code:
                 return code
         return skiltnummer_from_filename(filename)
+    return None
+
+
+def slutt_fart_verdi_from_code(code: str | None) -> str | None:
+    if not code:
+        return None
+    compact = code.replace(" ", "").replace(",", ".")
+    if compact == "368" or compact.startswith("368."):
+        return "368"
+    match = re.fullmatch(r"364[._](\d{2,3})", compact)
+    if match:
+        return match.group(1)
+    return None
+
+
+def slutt_fart_verdi_from_filename(filename: str) -> str | None:
+    normalized = normalize_key(filename)
+    if "fartsgrenseslutt" in normalized:
+        return "368"
+    match = SLUTT_FART_SPEED_RE.search(normalized)
+    if match:
+        return match.group(1)
     return None
 
 
@@ -778,6 +984,7 @@ def import_csv(
     path: Path,
     connection: sqlite3.Connection,
     forkjoersvei_occurrences: dict[int, int] | None = None,
+    streknings_atk_ids: set[int] | None = None,
 ) -> int:
     objekt_type = detect_type(path.name)
     if objekt_type is None:
@@ -785,9 +992,12 @@ def import_csv(
         return 0
     if forkjoersvei_occurrences is None:
         forkjoersvei_occurrences = {}
+    if streknings_atk_ids is None:
+        streknings_atk_ids = set()
     separator = detect_separator(path)
     inserted = 0
     skipped = 0
+    reclassified_section_cameras = 0
     with path.open(encoding="utf-8-sig", newline="") as handle:
         reader = csv.DictReader(handle, delimiter=separator)
         columns = [str(column) for column in (reader.fieldnames or [])]
@@ -800,6 +1010,16 @@ def import_csv(
                 skipped += 1
                 continue
             objekt_id = parse_id(string_row, columns)
+            row_type = objekt_type
+            if objekt_type == "STREKNINGS_ATK" and objekt_id is not None:
+                streknings_atk_ids.add(objekt_id)
+            if objekt_type == "FOTOBOKS" and is_section_control_camera(
+                string_row,
+                columns,
+                streknings_atk_ids,
+            ):
+                row_type = "STREKNINGS_ATK"
+                reclassified_section_cameras += 1
             if objekt_type == "KOMMUNE":
                 geometry = kommune_geometry_from_row(string_row, columns)
             else:
@@ -807,15 +1027,27 @@ def import_csv(
             if objekt_id is None or geometry is None:
                 skipped += 1
                 continue
-            verdi = value_for_type(string_row, columns, objekt_type, path.name)
-            retning = retning_from_row(string_row, columns)
-            latitude, longitude = alert_coordinates(objekt_type, retning, geometry)
-            if objekt_type == "KOMMUNE":
+            verdi = value_for_type(string_row, columns, row_type, path.name)
+            retning = retning_from_row(string_row, columns, row_type)
+            latitude, longitude = alert_coordinates(row_type, retning, geometry)
+            if row_type == "KOMMUNE":
                 points_blob = pack_polygon_rings(geometry)
             else:
-                points_blob = pack_stretch_points(objekt_type, geometry)
+                points_blob = pack_stretch_points(row_type, geometry)
+            veg_retning = geometry["veg_retning_grader"]
+            if row_type in CROSSING_STRETCH_TYPES:
+                # Boom / rails / quay lines often run across the road.
+                # Snap heading from the road network instead.
+                veg_retning = None
             row_id = objekt_id
-            if objekt_type in {"FORKJOERSVEI", "STREKNINGS_ATK"}:
+            if row_type in {
+                "FORKJOERSVEI",
+                "STREKNINGS_ATK",
+                "VILTFARE",
+                "BOM",
+                "JERNBANE",
+                "FERJEKAI",
+            }:
                 occurrence = forkjoersvei_occurrences.get(objekt_id, 0)
                 forkjoersvei_occurrences[objekt_id] = occurrence + 1
                 row_id = forkjoersvei_row_id(objekt_id, occurrence)
@@ -827,7 +1059,7 @@ def import_csv(
                 """,
                 (
                     row_id,
-                    objekt_type,
+                    row_type,
                     verdi,
                     latitude,
                     longitude,
@@ -836,7 +1068,7 @@ def import_csv(
                     geometry["min_lon"],
                     geometry["max_lon"],
                     retning,
-                    geometry["veg_retning_grader"],
+                    veg_retning,
                     points_blob,
                 ),
             )
@@ -853,6 +1085,12 @@ def import_csv(
         f"{skipped} rader hoppet over",
         flush=True,
     )
+    if reclassified_section_cameras:
+        print(
+            f"{path.name}: {reclassified_section_cameras} ATK-punkt "
+            "importert som STREKNINGS_ATK (strekningskamera).",
+            flush=True,
+        )
     return inserted
 
 
@@ -890,6 +1128,182 @@ def unpack_stretch_points(blob: bytes | None) -> list[tuple[float, float]]:
     return points
 
 
+def retning_grid_cell(latitude: float, longitude: float) -> tuple[int, int]:
+    return (
+        int(math.floor(latitude / RETNING_GRID_CELL_DEGREES)),
+        int(math.floor(longitude / RETNING_GRID_CELL_DEGREES)),
+    )
+
+
+def compass_bearing_wgs(
+    from_latitude: float,
+    from_longitude: float,
+    to_latitude: float,
+    to_longitude: float,
+) -> float | None:
+    northing = (to_latitude - from_latitude) * METERS_PER_DEGREE_LATITUDE
+    easting = (
+        (to_longitude - from_longitude)
+        * METERS_PER_DEGREE_LATITUDE
+        * math.cos(math.radians((from_latitude + to_latitude) / 2.0))
+    )
+    if abs(easting) < 0.5 and abs(northing) < 0.5:
+        return None
+    return math.degrees(math.atan2(easting, northing)) % 360.0
+
+
+def distance_to_segment_meters(
+    latitude: float,
+    longitude: float,
+    start: tuple[float, float],
+    end: tuple[float, float],
+) -> tuple[float, float] | None:
+    heading = compass_bearing_wgs(start[0], start[1], end[0], end[1])
+    if heading is None:
+        return None
+    segment_length = distance_meters(start[0], start[1], end[0], end[1])
+    if segment_length < 0.5:
+        return None
+    from_start = distance_meters(start[0], start[1], latitude, longitude)
+    start_to_point_bearing = compass_bearing_wgs(
+        start[0],
+        start[1],
+        latitude,
+        longitude,
+    )
+    if start_to_point_bearing is None:
+        return 0.0, heading
+    heading_delta = abs(((start_to_point_bearing - heading + 180.0) % 360.0) - 180.0)
+    along_track = from_start * math.cos(math.radians(heading_delta))
+    fraction = min(1.0, max(0.0, along_track / segment_length))
+    snapped_latitude = start[0] + ((end[0] - start[0]) * fraction)
+    snapped_longitude = start[1] + ((end[1] - start[1]) * fraction)
+    return (
+        distance_meters(latitude, longitude, snapped_latitude, snapped_longitude),
+        heading,
+    )
+
+
+def build_stretch_heading_grid(
+    connection: sqlite3.Connection,
+) -> dict[tuple[int, int], list[tuple[tuple[float, float], tuple[float, float]]]]:
+    grid: dict[
+        tuple[int, int],
+        list[tuple[tuple[float, float], tuple[float, float]]],
+    ] = {}
+    placeholders = ",".join("?" for _ in ROAD_ALIGNED_STRETCH_TYPES)
+    rows = connection.execute(
+        f"SELECT points FROM vegobjekt WHERE type IN ({placeholders}) AND points IS NOT NULL",
+        ROAD_ALIGNED_STRETCH_TYPES,
+    )
+    for (blob,) in rows:
+        points = unpack_stretch_points(blob)
+        for index in range(len(points) - 1):
+            start = points[index]
+            end = points[index + 1]
+            start_cell = retning_grid_cell(start[0], start[1])
+            end_cell = retning_grid_cell(end[0], end[1])
+            min_lat_cell = min(start_cell[0], end_cell[0])
+            max_lat_cell = max(start_cell[0], end_cell[0])
+            min_lon_cell = min(start_cell[1], end_cell[1])
+            max_lon_cell = max(start_cell[1], end_cell[1])
+            for lat_cell in range(min_lat_cell, max_lat_cell + 1):
+                for lon_cell in range(min_lon_cell, max_lon_cell + 1):
+                    grid.setdefault((lat_cell, lon_cell), []).append((start, end))
+    return grid
+
+
+def nearest_stretch_heading(
+    latitude: float,
+    longitude: float,
+    grid: dict[
+        tuple[int, int],
+        list[tuple[tuple[float, float], tuple[float, float]]],
+    ],
+    max_distance_meters: float = POINT_RETNING_SNAP_METERS,
+) -> float | None:
+    origin_cell = retning_grid_cell(latitude, longitude)
+    best_distance = max_distance_meters
+    best_heading: float | None = None
+    seen: set[tuple[float, float, float, float]] = set()
+    for lat_delta in (-1, 0, 1):
+        for lon_delta in (-1, 0, 1):
+            cell = (origin_cell[0] + lat_delta, origin_cell[1] + lon_delta)
+            for start, end in grid.get(cell, ()):
+                key = (start[0], start[1], end[0], end[1])
+                if key in seen:
+                    continue
+                seen.add(key)
+                projected = distance_to_segment_meters(latitude, longitude, start, end)
+                if projected is None:
+                    continue
+                distance, heading = projected
+                if distance <= best_distance:
+                    best_distance = distance
+                    best_heading = heading
+    return best_heading
+
+
+def fill_point_veg_retning_from_stretches(connection: sqlite3.Connection) -> int:
+    """Set vegRetningGrader on point signs that have lok.retning but no heading.
+
+    Warning plates are points. MED/MOT is relative to road metrering, which
+    speed-limit / priority-road polylines already follow.
+    """
+    placeholders = ",".join("?" for _ in POINT_RETNING_TYPES)
+    missing = connection.execute(
+        f"""
+        SELECT id, lat, lon FROM vegobjekt
+        WHERE type IN ({placeholders})
+          AND retning IN ('MED', 'MOT')
+          AND vegRetningGrader IS NULL
+        """,
+        POINT_RETNING_TYPES,
+    ).fetchall()
+    if not missing:
+        print("Alle punkt-skilt med lok.retning har allerede vegRetningGrader.")
+        return 0
+    print(
+        f"Fyller vegRetningGrader for {len(missing)} punkt-skilt fra "
+        "fartsgrense-/forkjørsvei-strekninger...",
+        flush=True,
+    )
+    grid = build_stretch_heading_grid(connection)
+    updates: list[tuple[float, int]] = []
+    filled = 0
+    for objekt_id, latitude, longitude in missing:
+        heading = nearest_stretch_heading(latitude, longitude, grid)
+        if heading is None:
+            continue
+        updates.append((heading, objekt_id))
+        filled += 1
+        if len(updates) >= 2_000:
+            connection.executemany(
+                "UPDATE vegobjekt SET vegRetningGrader = ? WHERE id = ?",
+                updates,
+            )
+            connection.commit()
+            updates.clear()
+            print(f"  {filled} skilt oppdatert...", flush=True)
+    if updates:
+        connection.executemany(
+            "UPDATE vegobjekt SET vegRetningGrader = ? WHERE id = ?",
+            updates,
+        )
+        connection.commit()
+    missed = len(missing) - filled
+    missed_text = ""
+    if missed:
+        missed_text = (
+            f" ({missed} uten strekning innen {POINT_RETNING_SNAP_METERS:.0f} m)"
+        )
+    print(
+        f"Satte vegRetningGrader på {filled} punkt-skilt{missed_text}.",
+        flush=True,
+    )
+    return filled
+
+
 def rebuild_rtree(connection: sqlite3.Connection) -> None:
     connection.execute("DROP TABLE IF EXISTS vegobjekt_rtree")
     connection.execute(CREATE_VEGOBJEKT_RTREE)
@@ -914,8 +1328,10 @@ def rebuild_segment_rtree(connection: sqlite3.Connection) -> None:
     segment_id = 1
     segment_rows: list[tuple[int, int]] = []
     rtree_rows: list[tuple[int, float, float, float, float]] = []
+    placeholders = ",".join("?" for _ in STRETCH_TYPES)
     rows = connection.execute(
-        "SELECT id, points FROM vegobjekt WHERE type IN ('FART', 'FORKJOERSVEI', 'STREKNINGS_ATK') AND points IS NOT NULL"
+        f"SELECT id, points FROM vegobjekt WHERE type IN ({placeholders}) AND points IS NOT NULL",
+        STRETCH_TYPES,
     )
     for objekt_id, blob in rows:
         points = unpack_stretch_points(blob)
@@ -1091,8 +1507,13 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Bygg bare strekning-indeksen på eksisterende vegdata.db",
     )
+    parser.add_argument(
+        "--fill-retning",
+        action="store_true",
+        help="Fyll vegRetningGrader på punkt-skilt med lok.retning i eksisterende vegdata.db",
+    )
     args = parser.parse_args(argv)
-    if args.segments_only:
+    if args.segments_only or args.fill_retning:
         if not OUTPUT_DB.exists():
             print(f"Fant ikke {OUTPUT_DB}. Kjør full import først.")
             return 1
@@ -1100,7 +1521,10 @@ def main(argv: list[str] | None = None) -> int:
         shutil.copy2(OUTPUT_DB, working_db)
         connection = sqlite3.connect(working_db)
         try:
-            rebuild_segment_rtree(connection)
+            if args.segments_only:
+                rebuild_segment_rtree(connection)
+            if args.fill_retning:
+                fill_point_veg_retning_from_stretches(connection)
             connection.commit()
         finally:
             connection.close()
@@ -1138,24 +1562,44 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Slettet {deleted} eksisterende rader for {', '.join(sorted(only_types))}.")
 
     try:
-        csv_files = sorted(CSV_DIR.glob("*.csv"))
+        csv_files = sorted(
+            CSV_DIR.glob("*.csv"),
+            key=lambda path: (
+                0 if detect_type(path.name) == "STREKNINGS_ATK" else
+                1 if detect_type(path.name) == "FOTOBOKS" else
+                2,
+                path.name,
+            ),
+        )
         if not csv_files:
             print(f"Ingen CSV-filer i {CSV_DIR}.")
         total = 0
         forkjoersvei_occurrences: dict[int, int] = {}
+        streknings_atk_ids: set[int] = set()
+        if only_types is not None:
+            streknings_atk_ids.update(streknings_atk_nvdb_ids(connection))
         for csv_path in csv_files:
             detected = detect_type(csv_path.name)
             if only_types is not None and detected not in only_types:
                 continue
-            total += import_csv(csv_path, connection, forkjoersvei_occurrences)
+            total += import_csv(
+                csv_path,
+                connection,
+                forkjoersvei_occurrences,
+                streknings_atk_ids,
+            )
         rebuild_rtree(connection)
-        stretch_types = {"FART", "FORKJOERSVEI", "STREKNINGS_ATK"}
+        stretch_types = set(STRETCH_TYPES)
         if only_types is None:
             rebuild_segment_rtree(connection)
         elif stretch_types & only_types:
             append_stretch_index(connection, stretch_types & only_types)
         else:
-            print("Hopper over strekning-indeks (ingen FART/FORKJOERSVEI/STREKNINGS_ATK-endring).")
+            print(
+                "Hopper over strekning-indeks "
+                "(ingen strekningstype-endring)."
+            )
+        fill_point_veg_retning_from_stretches(connection)
         connection.commit()
         print(f"Skrev {total} rader til {working_db}")
     finally:

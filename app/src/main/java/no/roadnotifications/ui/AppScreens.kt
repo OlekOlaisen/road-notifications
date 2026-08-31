@@ -52,6 +52,10 @@ fun HomeScreen(
             text = statusMessage,
             style = MaterialTheme.typography.bodyLarge,
         )
+        Text(
+            text = "Android Auto: slå på Ukjente kilder i Auto-utviklerinnstillinger, og huk av Vegassistent under Tilpass startside.",
+            style = MaterialTheme.typography.bodyMedium,
+        )
         Button(
             onClick = onToggleTracking,
             modifier = Modifier
@@ -153,7 +157,7 @@ fun TestAlertsScreen(
     onTestCombined: () -> Unit,
 ) {
     val testAlerts = remember {
-        AlertCategories.toggleable.map { category ->
+        AlertCategories.testable.map { category ->
             val testVerdi = when {
                 category.type == VegObjektType.BOM.name -> "42"
                 category.type == VegObjektType.JERNBANE.name -> "I plan"
@@ -166,8 +170,14 @@ fun TestAlertsScreen(
                 VegObjektType.BOM.name -> "Bomstasjon 42 kr"
                 else -> category.label
             }
-            TestAlertItem(label) { onTestAlert(category.type, testVerdi) }
-        } + TestAlertItem("Forkjørsvei - Fartsgrense 50", onTestCombined)
+            TestAlertItem(
+                label = label,
+                signDrawableRes = category.signDrawableRes,
+            ) { onTestAlert(category.type, testVerdi) }
+        } + TestAlertItem(
+            label = "Forkjørsvei - Fartsgrense 50",
+            onClick = onTestCombined,
+        )
     }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -190,25 +200,45 @@ fun TestAlertsScreen(
             items = testAlerts,
             key = { item -> item.label },
         ) { item ->
-            TestAlertButton(label = item.label, onClick = item.onClick)
+            TestAlertButton(
+                label = item.label,
+                signDrawableRes = item.signDrawableRes,
+                onClick = item.onClick,
+            )
         }
     }
 }
 
 private data class TestAlertItem(
     val label: String,
+    val signDrawableRes: Int? = null,
     val onClick: () -> Unit,
 )
 
 @Composable
 private fun TestAlertButton(
     label: String,
+    signDrawableRes: Int?,
     onClick: () -> Unit,
 ) {
     Button(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth(),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
     ) {
-        Text(text = label)
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            if (signDrawableRes != null) {
+                Image(
+                    painter = painterResource(id = signDrawableRes),
+                    contentDescription = null,
+                    modifier = Modifier.size(32.dp),
+                    contentScale = ContentScale.Fit,
+                )
+            }
+            Text(text = label)
+        }
     }
 }

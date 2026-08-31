@@ -11,8 +11,9 @@ enum class AlertImportance {
 }
 
 /**
- * Action-required signs outrank advance warnings so a curve or junction
- * plate cannot take the single heads-up slot from stop, yield, or cameras.
+ * Action-required signs play first. Other matches in the same window follow
+ * afterwards instead of being dropped. Low-importance plates still wait when
+ * a high-importance sign is approaching but not yet in the alert window.
  */
 object AlertPriority {
     const val LOOKAHEAD_METERS = 90f
@@ -27,7 +28,9 @@ object AlertPriority {
             VegObjektType.FOTOBOKS.name,
             VegObjektType.STREKNINGS_ATK.name -> AlertImportance.HIGH
             VegObjektType.FART.name,
-            VegObjektType.FORKJOERSVEI.name -> AlertImportance.MEDIUM
+            VegObjektType.SLUTT_FART.name,
+            VegObjektType.FORKJOERSVEI.name,
+            VegObjektType.VILTFARE.name -> AlertImportance.MEDIUM
             else -> AlertImportance.LOW
         }
     }
@@ -41,16 +44,17 @@ object AlertPriority {
             VegObjektType.STREKNINGS_ATK.name -> 3
             VegObjektType.FORKJOERSVEI.name -> 4
             VegObjektType.FART.name -> 5
-            VegObjektType.FARLIG_SVING.name -> 6
-            VegObjektType.FARLIG_VEGKRYSS.name -> 7
-            VegObjektType.TUNNEL.name -> 8
-            VegObjektType.SMALERE_VEG.name -> 9
-            VegObjektType.BOM.name -> 10
-            VegObjektType.FERJEKAI.name -> 11
-            VegObjektType.VILTFARE.name -> 12
-            VegObjektType.SLUTT_FORKJOERSVEI.name -> 13
-            VegObjektType.KOMMUNE.name -> 14
-            else -> 15
+            VegObjektType.SLUTT_FART.name -> 6
+            VegObjektType.FARLIG_SVING.name -> 7
+            VegObjektType.FARLIG_VEGKRYSS.name -> 8
+            VegObjektType.TUNNEL.name -> 9
+            VegObjektType.SMALERE_VEG.name -> 10
+            VegObjektType.BOM.name -> 11
+            VegObjektType.FERJEKAI.name -> 12
+            VegObjektType.VILTFARE.name -> 13
+            VegObjektType.SLUTT_FORKJOERSVEI.name -> 14
+            VegObjektType.KOMMUNE.name -> 15
+            else -> 16
         }
     }
 
@@ -71,6 +75,7 @@ object AlertPriority {
             VegObjektType.BOM.name -> 11
             VegObjektType.FERJEKAI.name -> 12
             VegObjektType.FART.name -> 13
+            VegObjektType.SLUTT_FART.name -> 13
             VegObjektType.KOMMUNE.name -> 14
             else -> 15
         }
@@ -106,28 +111,19 @@ object AlertPriority {
         )
     }
 
-    fun shouldSuppressLow(
-        candidatesInWindow: List<AlertCandidate>,
-        higherImportanceApproaching: Boolean,
-    ): Boolean {
-        if (higherImportanceApproaching) {
-            return true
-        }
-        return candidatesInWindow.any { candidate ->
-            importance(candidate.vegObjekt.type) != AlertImportance.LOW
-        }
-    }
-
     fun selectToNotify(
         passingOncePerPass: List<AlertCandidate>,
-        candidatesInWindow: List<AlertCandidate>,
         higherImportanceApproaching: Boolean,
     ): List<AlertCandidate> {
-        if (!shouldSuppressLow(candidatesInWindow, higherImportanceApproaching)) {
-            return passingOncePerPass
+        val allowed = if (higherImportanceApproaching) {
+            passingOncePerPass.filter { candidate ->
+                importance(candidate.vegObjekt.type) != AlertImportance.LOW
+            }
+        } else {
+            passingOncePerPass
         }
-        return passingOncePerPass.filter { candidate ->
-            importance(candidate.vegObjekt.type) != AlertImportance.LOW
+        return allowed.sortedBy { candidate ->
+            messageOrder(candidate.vegObjekt.type)
         }
     }
 }

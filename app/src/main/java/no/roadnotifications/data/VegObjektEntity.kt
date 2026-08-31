@@ -28,8 +28,7 @@ data class VegObjektEntity(
     val vegRetningGrader: Float? = null,
     /**
      * Packed polyline for stretch objects (speed limit, priority road,
-     * section-control ATK). Used to detect that the vehicle has entered
-     * the stretch, not only the start coordinate.
+     * section-control ATK, wildlife, toll, railway crossing, ferry quay).
      */
     val points: ByteArray? = null,
 )
