@@ -2,7 +2,7 @@
 
 Road-sign and hazard alerts while you drive, on the phone and in **Android Auto**. Everything runs on the device — no network is needed once the app is installed.
 
-The app matches GPS to a map of Norwegian road objects (NVDB) and shows a heads-up when something is ahead on the road you are on.
+The app matches GPS to a map of Norwegian road objects (NVDB) and shows a heads-up when something is ahead on the road you are on. The app is still a work in progress, so everything is not perfect yet.
 
 ## Screenshots
 
@@ -72,7 +72,7 @@ The app is sideloaded, so Android Auto must allow unknown sources:
 2. Enable developer settings (tap the version number repeatedly).
 3. Allow unknown sources.
 4. Connect to the car and grant location and notification access.
-5. Optionally pin Vegassistent on the Android Auto launcher (Customize launcher).
+5. Pin Vegassistent on the Android Auto launcher (Customize launcher).
 
 Alerts can then show as heads-up over the map while you navigate.
 
